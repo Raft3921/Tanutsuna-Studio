@@ -339,9 +339,17 @@ class StudioWindow(QMainWindow):
         self.desk.update_install_button.setEnabled(False)
         labels={'check':'GitHubで最新版を確認しています…','download':'更新ファイルを取得・検証しています…','install':'アプリを安全に入れ替える準備をしています…'}
         self.desk.update_status.setText(labels[action])
+        if action in ('download','install'):
+            self.desk.update_progress.setValue(0);self.desk.update_progress.show()
+        else:self.desk.update_progress.hide()
         worker=UpdateWorker(action,release,package)
+        worker.progress.connect(self._update_progress)
         worker.completed.connect(lambda result,a=action:self._update_finished(a,result))
         self.update_worker=worker;worker.start()
+
+    def _update_progress(self,value,message):
+        self.desk.update_progress.setValue(value)
+        self.desk.update_status.setText(message)
 
     def check_for_updates(self):
         self._start_update_worker('check')
@@ -364,7 +372,10 @@ class StudioWindow(QMainWindow):
         self.desk.update_check_button.setEnabled(True)
         if result.get('error'):
             self.desk.update_status.setText('更新できませんでした。現在のアプリはそのままです。 '+result['error'])
+            self.desk.update_download_button.setEnabled(bool(self.update_release and self.update_release.get('available') and not self.update_release.get('unsupported')))
+            self.desk.update_install_button.setEnabled(bool(self.update_package and self.update_package.is_file()))
         elif action=='check':
+            self.desk.update_progress.hide()
             if result.get('available'):
                 self.update_release=result
                 self.desk.update_status.setText(f"新しい版 {result['version']} が見つかりました。配布ファイルを確認してから入れ替えます。")
@@ -377,10 +388,12 @@ class StudioWindow(QMainWindow):
                 self.desk.update_status.setText(f"最新版です（{result.get('version','')}）。")
         elif action=='download':
             self.update_package=Path(result['package'])
+            self.desk.update_progress.setValue(100)
             self.desk.update_status.setText(f"{result['version']} をダウンロードし、サイズ・SHA-256・ZIP構成を確認しました。再起動して適用できます。")
             self.desk.update_download_button.setEnabled(True)
             self.desk.update_install_button.setEnabled(True)
         elif action=='install' and result.get('restarting'):
+            self.desk.update_progress.setValue(100)
             self.desk.update_status.setText('更新を適用して再起動します。起動確認ができない場合は自動で前の版へ戻します。')
             QTimer.singleShot(250,self.close)
 

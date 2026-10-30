@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QProcess, QUrl, QTimer, QDateTime
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QPushButton,
     QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QStackedWidget,
-    QFileDialog,QInputDialog,QMessageBox,QSplitter,QFormLayout,QMenu)
+    QFileDialog,QInputDialog,QMessageBox,QSplitter,QFormLayout,QMenu,QProgressBar)
 from .workspace import FOLDERS, DuplicateProject
 from .takes import takes_for
 
@@ -205,6 +205,9 @@ class ProductionDesk(QWidget):
         updates,update_box=card();update_box.addWidget(text('アプリの更新','SectionTitle'))
         self.update_status=text('起動時に最新版を確認します。更新はバックグラウンドで取得します。','Muted')
         update_box.addWidget(self.update_status)
+        self.update_progress=QProgressBar();self.update_progress.setRange(0,100);self.update_progress.setValue(0)
+        self.update_progress.setFormat('%p%');self.update_progress.setTextVisible(True);self.update_progress.setFixedHeight(18)
+        self.update_progress.hide();update_box.addWidget(self.update_progress)
         update_row=QHBoxLayout()
         self.update_check_button=self.button('更新を確認',self.editor.check_for_updates)
         self.update_download_button=self.button('更新をダウンロード',self.editor.download_update)

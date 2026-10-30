@@ -14,6 +14,7 @@ import urllib.request
 import uuid
 import zipfile
 import plistlib
+from pathlib import PurePosixPath
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
@@ -86,7 +87,77 @@ def latest_release() -> dict:
             "asset": wanted, "release_url": release.get("html_url", "")}
 
 
-def _download(release: dict, destination: Path) -> None:
+def _emit_progress(progress, value: int, message: str) -> None:
+    if progress:
+        progress(max(0, min(100, int(value))), message)
+
+
+def _safe_zip_entries(archive: zipfile.ZipFile, allow_symlinks: bool) -> list[tuple[zipfile.ZipInfo, str, bool]]:
+    """Reject traversal/special files while allowing contained Mac app links."""
+    entries = []
+    seen = set()
+    symlinks = set()
+    for member in archive.infolist():
+        raw = member.filename
+        if "\\" in raw or "\x00" in raw:
+            raise RuntimeError("更新ZIPに不正なファイル名があります。")
+        path = PurePosixPath(raw)
+        parts = tuple(part for part in path.parts if part not in ("", "."))
+        if path.is_absolute() or not parts or any(part == ".." for part in path.parts) or (parts and ":" in parts[0]):
+            raise RuntimeError("更新ZIPに許可されないパスが含まれています。")
+        normalized = "/".join(parts)
+        mode = member.external_attr >> 16
+        kind = stat.S_IFMT(mode)
+        is_link = stat.S_ISLNK(mode)
+        is_dir = member.is_dir() or stat.S_ISDIR(mode)
+        if kind not in (0, stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK):
+            raise RuntimeError("更新ZIPに特殊なファイルが含まれています。")
+        if is_link:
+            if not allow_symlinks:
+                raise RuntimeError("この更新ZIPではシンボリックリンクを使用できません。")
+            target_text = archive.read(member).decode("utf-8")
+            target = PurePosixPath(target_text)
+            if not target_text or target.is_absolute() or "\\" in target_text or "\x00" in target_text:
+                raise RuntimeError("更新ZIPに許可されないリンク先が含まれています。")
+            stack = list(parts[:-1])
+            for part in target.parts:
+                if part in ("", "."):
+                    continue
+                if part == "..":
+                    if not stack:
+                        raise RuntimeError("更新ZIPのリンク先がアプリの外を指しています。")
+                    stack.pop()
+                else:
+                    stack.append(part)
+            symlinks.add(normalized)
+        if normalized in seen:
+            raise RuntimeError("更新ZIPに重複するファイル名があります。")
+        seen.add(normalized)
+        entries.append((member, normalized, is_link))
+    for _member, name, _is_link in entries:
+        parents = PurePosixPath(name).parents
+        if any(str(parent) in symlinks for parent in parents):
+            raise RuntimeError("更新ZIPがシンボリックリンクの内側へファイルを書き込みます。")
+    return entries
+
+
+def _verify_zip_crc(archive: zipfile.ZipFile, entries, progress=None) -> None:
+    files = [(member, name) for member, name, is_link in entries
+             if not is_link and not member.is_dir() and member.file_size]
+    total = sum(member.file_size for member, _ in files) or 1
+    checked = 0
+    last = -1
+    for member, name in files:
+        with archive.open(member) as source:
+            while chunk := source.read(1024 * 1024):
+                checked += len(chunk)
+                value = 72 + int(19 * checked / total)
+                if value != last:
+                    _emit_progress(progress, value, f"ZIPを検証中: {name}")
+                    last = value
+
+
+def _download(release: dict, destination: Path, progress=None) -> None:
     size = release["size"]
     if size <= 0 or size > MAX_RELEASE_BYTES:
         raise RuntimeError("配布ファイルのサイズが許容範囲外です。")
@@ -94,6 +165,7 @@ def _download(release: dict, destination: Path) -> None:
         "Accept": "application/octet-stream", "User-Agent": "Tanutsuna-Studio-Updater"})
     digest = hashlib.sha256()
     received = 0
+    last = -1
     with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
         while chunk := response.read(1024 * 1024):
             received += len(chunk)
@@ -101,20 +173,18 @@ def _download(release: dict, destination: Path) -> None:
                 raise RuntimeError("配布ファイルの実サイズが宣言値を超えました。")
             output.write(chunk)
             digest.update(chunk)
+            value = int(70 * received / size)
+            if value != last:
+                _emit_progress(progress, value, f"更新をダウンロード中: {received // (1024 * 1024)} / {size // (1024 * 1024)} MB")
+                last = value
     if received != size or digest.hexdigest().lower() != release["sha256"].lower():
         destination.unlink(missing_ok=True)
         raise RuntimeError("ダウンロードの検証に失敗しました。現在のアプリは変更していません。")
+    _emit_progress(progress, 71, "ダウンロードのSHA-256を確認中…")
     with zipfile.ZipFile(destination) as archive:
-        bad = archive.testzip()
-        if bad:
-            raise RuntimeError(f"ZIPの検証に失敗しました: {bad}")
-        for member in archive.infolist():
-            if stat.S_ISLNK(member.external_attr >> 16):
-                raise RuntimeError("配布ZIPにシンボリックリンクが含まれています。")
-            normalized = member.filename.replace("\\", "/")
-            target = (destination.parent / "inspect" / normalized).resolve()
-            if not target.is_relative_to((destination.parent / "inspect").resolve()):
-                raise RuntimeError("配布ZIPに許可されないパスが含まれています。")
+        is_mac = packaged_platform() == "macOS-arm64"
+        entries = _safe_zip_entries(archive, allow_symlinks=is_mac)
+        _verify_zip_crc(archive, entries, progress)
         names = archive.namelist()
         if packaged_platform() == "Windows11-x64":
             if "Tanutsuna Studio.exe" not in names or "studio-manifest.json" not in names:
@@ -122,13 +192,16 @@ def _download(release: dict, destination: Path) -> None:
             manifest = json.loads(archive.read("studio-manifest.json"))
             if manifest.get("studioVersion") != release["version"].lstrip("v"):
                 raise RuntimeError("Windows更新ZIPの版数が一致しません。")
-            for name, expected in manifest.get("sha256", {}).items():
+            manifest_items = list(manifest.get("sha256", {}).items())
+            for index, (name, expected) in enumerate(manifest_items):
                 try:
                     actual = hashlib.sha256(archive.read(name)).hexdigest()
                 except KeyError as exc:
                     raise RuntimeError(f"更新ZIPに必要なファイルがありません: {name}") from exc
                 if actual.lower() != expected.lower():
                     raise RuntimeError(f"Windowsアプリの検証に失敗しました: {name}")
+                if manifest_items:
+                    _emit_progress(progress, 91 + int(8 * (index + 1) / len(manifest_items)), f"アプリ構成を検証中: {index + 1} / {len(manifest_items)}")
         else:
             app_dirs = {name.split("/")[0] for name in names if name.endswith(".app/Contents/Info.plist")}
             if len(app_dirs) != 1:
@@ -140,6 +213,56 @@ def _download(release: dict, destination: Path) -> None:
             info = plistlib.loads(archive.read(plist_path))
             if info.get("CFBundleShortVersionString") != release["version"].lstrip("v"):
                 raise RuntimeError("Mac更新アプリの版数が一致しません。")
+            _emit_progress(progress, 99, "Macアプリとリンク構成を確認しました。")
+    _emit_progress(progress, 100, "更新ファイルの検証が完了しました。")
+
+
+def _extract_windows(archive: zipfile.ZipFile, stage: Path, entries, progress=None) -> None:
+    files = [(member, name) for member, name, is_link in entries if not is_link]
+    total = sum(member.file_size for member, _ in files) or 1
+    copied = 0
+    last = -1
+    for member, name in files:
+        target = stage.joinpath(*PurePosixPath(name).parts)
+        if member.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(member) as source, target.open("wb") as output:
+            while chunk := source.read(1024 * 1024):
+                output.write(chunk)
+                copied += len(chunk)
+                value = int(95 * copied / total)
+                if value != last:
+                    _emit_progress(progress, value, f"更新ファイルを展開中: {copied // (1024 * 1024)} / {total // (1024 * 1024)} MB")
+                    last = value
+        mode = member.external_attr >> 16
+        if mode and stat.S_ISREG(mode):
+            target.chmod(mode & 0o777)
+
+
+def _extract_mac(package: Path, stage: Path, progress=None) -> None:
+    """Use ditto so app-bundle links, executable bits, and resource forks survive."""
+    process = subprocess.Popen(["/usr/bin/ditto", "-V", "-x", "-k", str(package), str(stage)],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                               bufsize=1)
+    with zipfile.ZipFile(package) as archive:
+        total = sum(1 for member in archive.infolist()
+                    if not member.is_dir() and not member.filename.startswith("__MACOSX/")
+                    and not ("/._" in member.filename)) or 1
+    completed = 0
+    last = -1
+    assert process.stdout is not None
+    for _line in process.stdout:
+        completed += 1
+        value = min(95, int(95 * completed / total))
+        if value != last:
+            _emit_progress(progress, value, f"Macアプリを展開中: {min(completed, total)} / {total} ファイル")
+            last = value
+    code = process.wait()
+    if code:
+        raise RuntimeError(f"macOS標準のアーカイブ展開に失敗しました（終了コード {code}）。")
+    _emit_progress(progress, 96, "Macアプリの実行属性とリソースを復元しました。")
 
 
 def _data_root() -> Path:
@@ -147,7 +270,7 @@ def _data_root() -> Path:
     return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))
 
 
-def install_and_restart(release: dict, package: Path, current_pid: int) -> None:
+def install_and_restart(release: dict, package: Path, current_pid: int, progress=None) -> None:
     target = installation_root()
     if target is None:
         raise RuntimeError("この起動方式は自動更新に対応していません。Releaseページから更新してください。")
@@ -159,7 +282,12 @@ def install_and_restart(release: dict, package: Path, current_pid: int) -> None:
     stage = work / "stage"
     stage.mkdir()
     with zipfile.ZipFile(package) as archive:
-        archive.extractall(stage)
+        is_mac = packaged_platform() == "macOS-arm64"
+        entries = _safe_zip_entries(archive, allow_symlinks=is_mac)
+        if is_mac:
+            _extract_mac(package, stage, progress)
+        else:
+            _extract_windows(archive, stage, entries, progress)
     marker = data / "update-boot.json"
     marker.unlink(missing_ok=True)
     if sys.platform == "darwin":
@@ -190,6 +318,7 @@ open -a "$target"
 exit 2
 """, encoding="utf-8")
         helper.chmod(0o700)
+        _emit_progress(progress, 99, "アプリの入れ替えと再起動を準備中…")
         subprocess.Popen(["/bin/sh", str(helper), str(target), str(candidate), str(target)+".previous-"+token,
                           str(marker), token, str(current_pid), str(work)],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -222,6 +351,7 @@ try {
   exit 2
 }
 ''', encoding="utf-8")
+        _emit_progress(progress, 99, "アプリの入れ替えと再起動を準備中…")
         subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper),
                           str(target), str(candidate), str(target)+".previous-"+token,
                           str(marker), token, str(current_pid), str(work)],
@@ -231,6 +361,7 @@ try {
 
 class UpdateWorker(QThread):
     completed = Signal(object)
+    progress = Signal(int, str)
 
     def __init__(self, action: str, release: dict | None = None, package: Path | None = None):
         super().__init__()
@@ -246,10 +377,10 @@ class UpdateWorker(QThread):
                 folder = _data_root() / "updates" / "download"
                 folder.mkdir(parents=True, exist_ok=True)
                 package = folder / self.release["asset"]
-                _download(self.release, package)
+                _download(self.release, package, self.progress.emit)
                 result = {"downloaded": True, "package": str(package), "version": self.release["version"]}
             elif self.action == "install":
-                install_and_restart(self.release, self.package, os.getpid())
+                install_and_restart(self.release, self.package, os.getpid(), self.progress.emit)
                 result = {"restarting": True}
             else:
                 raise ValueError("Unknown update action")
