@@ -292,20 +292,32 @@ class StudioWindow(QMainWindow):
             editor.deleteLater();self.loaded_editor=None;self.loaded_project=None
 
     def delete_project(self,project):
+        return self.delete_projects([project])
+
+    def delete_projects(self,projects):
         self.guard_deletion()
-        if self.loaded_project and self.loaded_project['id']==project['id']:self.unload_editor()
+        projects=list({project['id']:project for project in projects}.values())
+        if not projects:raise ValueError('作品一覧で削除する作品を選択してください。')
+        project_ids={project['id'] for project in projects}
+        if self.loaded_project and self.loaded_project['id'] in project_ids:self.unload_editor()
         panel=self.desk._recording_panel
-        if panel and panel.project and panel.project['id']==project['id']:
+        if panel and panel.project and panel.project['id'] in project_ids:
             panel.folder=panel.take=panel.project=None
-        ticket=self.data_trash.delete_project(project)
-        if self.desk._planning and self.desk._planning.project is project:
+        tickets=[];failure=None
+        for project in projects:
+            try:tickets.append(self.data_trash.delete_project(project))
+            except Exception as exc:
+                failure=exc;break
+        if self.desk._planning and self.desk._planning.project and self.desk._planning.project['id'] in project_ids:
             self.desk._planning.project=None;self.desk._planning.dirty=False
-        if self.desk.current is project:self.desk.current=None
-        self.desk.refresh_projects();self.desk.navigate('home')
+        if self.desk.current and self.desk.current['id'] in {p['id'] for p in projects[:len(tickets)]}:self.desk.current=None
+        self.desk.refresh_projects();self.desk.navigate('library')
         available=self.workspace.available_projects()
         if available:self.desk.select(available[0])
         self.desk.update_header();self.desk.status.setText('動画をゴミ箱へ移しました。左下のゴミ箱から戻せます。')
-        return ticket
+        if failure:raise RuntimeError(f'{len(tickets)}件をゴミ箱へ移した後、残りの削除に失敗しました：{failure}')
+        self.desk.status.setText(f'{len(tickets)}件の作品をゴミ箱へ移しました。作品一覧にいます。ゴミ箱から戻せます。')
+        return tickets[0] if len(tickets)==1 else tickets
 
     def refresh_deleted_data(self,project):
         editor=self.loaded_editor

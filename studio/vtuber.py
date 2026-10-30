@@ -4,8 +4,8 @@ import math
 import shutil
 import time
 from datetime import datetime
-from PySide6.QtCore import Qt, QTimer, QUrl, QSettings
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication,QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QGroupBox,
     QLabel,QPushButton,QComboBox,QSlider,QCheckBox,QFileDialog,QMessageBox,QSplitter,QDoubleSpinBox,QScrollArea)
 from .avatar_view import AvatarViewport
@@ -39,7 +39,7 @@ class VtuberPanel(QWidget):
                     self.mouth_shapes[vowel]=(max(.55,min(1.9,width)),max(.15,min(1.3,height)))
         except (ValueError,TypeError):pass
         self.pose=Pose();self.neutral=[0,0,0];self.last=time.monotonic();self.epoch=self.last
-        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None
+        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.tracking_dialog=None
         self.setMinimumHeight(420)
         outer=QVBoxLayout(self)
         controls=QHBoxLayout()
@@ -109,7 +109,7 @@ class VtuberPanel(QWidget):
         self.status=QLabel('手動で3Dモデルの可動部を確認できます。カメラは停止中です。')
         self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText)
         outer.addWidget(self.status)
-        help_=QLabel('カメラ追跡：ボタンで既定のブラウザーを開き、「カメラを開始」。顔の向き・移動と口の開閉を反映します。初回はブラウザーにカメラ許可が必要です。サングラスは固定。耳の揺れは補助アニメーションです。')
+        help_=QLabel('カメラ追跡はこのソフト内で自動開始します。初回のみOSのカメラ・マイク許可が必要です。映像は保存・送信せず、顔の動きはPC内で処理します。サングラスは固定、耳の揺れは補助アニメーションです。')
         help_.setWordWrap(True);outer.addWidget(help_)
         self.render_status=QLabel('3D描画：互換表示' if self.viewport.software else '3D描画：準備中')
         self.render_status.setWordWrap(True);outer.addWidget(self.render_status)
@@ -136,17 +136,22 @@ class VtuberPanel(QWidget):
 
     def start_tracking(self,checked=False,automatic=False):
         try:
+            if self.tracking_dialog and self.tracking_dialog.isVisible():
+                self.tracking_dialog.raise_();self.tracking_dialog.activateWindow();return True
             assets=Path(__file__).parent/'assets/tracker'
             if not (assets/'face_landmarker.task').is_file():raise ValueError('追跡モデルがありません。配布ZIPをすべて展開してください。')
             self.server.state.camera_label='';self.server.state.microphone_label='';self._last_camera_label='';self._last_microphone_label=''
             url=self.server.start()
             self.mode.setCurrentIndex(2)
             self.neutral=[0,0,0]
-            if automatic:url+='&autostart=1'
-            if not QDesktopServices.openUrl(QUrl(url)):
-                raise RuntimeError('既定のブラウザーを開けませんでした。ブラウザーを起動してから再試行してください。')
-            self.status.setText('ブラウザーでカメラ追跡画面を開きました。初回はブラウザーのカメラ・マイク許可を確認してください。')
-            self.start_button.setText('カメラ追跡画面を開く')
+            from urllib.parse import quote
+            url+='&autostart=1&camera='+quote(self.camera_choice.currentData() or '',safe='')
+            from .tracking_view import TrackingDialog
+            self.tracking_dialog=TrackingDialog(self,url)
+            self.tracking_dialog.finished.connect(self.tracking_dialog_finished)
+            self.tracking_dialog.show();self.tracking_dialog.raise_();self.tracking_dialog.activateWindow()
+            self.status.setText('アプリ内でカメラ追跡を開始しました。初回のみOSのカメラ・マイク許可が必要です。')
+            self.start_button.setText('カメラ追跡を表示')
             return True
         except Exception as exc:
             if automatic:raise
@@ -161,9 +166,18 @@ class VtuberPanel(QWidget):
         QTimer.singleShot(0,restart)
 
     def stop_tracking(self):
+        dialog,self.tracking_dialog=self.tracking_dialog,None
         self.server.stop();self.server.state.detected=False
         self.mode.setCurrentIndex(0);self.start_button.setText('カメラ追跡を開始')
         self.status.setText('カメラ入力と追跡を停止しました。')
+        if dialog:dialog.close()
+
+    def tracking_dialog_finished(self,*_):
+        self.tracking_dialog=None
+        if self.server.server is not None:
+            self.server.stop();self.server.state.detected=False
+            self.mode.setCurrentIndex(0);self.start_button.setText('カメラ追跡を開始')
+            self.status.setText('カメラ入力と追跡を停止しました。')
 
     def calibrate(self):
         raw,detected,_,_=self.server.state.snapshot()

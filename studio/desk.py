@@ -6,7 +6,7 @@ import sqlite3
 import json
 import re
 from contextlib import closing
-from PySide6.QtCore import Qt, QProcess, QUrl, QTimer, QDateTime
+from PySide6.QtCore import Qt, QProcess, QUrl, QTimer, QDateTime, QItemSelectionModel
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QPushButton,
     QLineEdit,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QStackedWidget,
@@ -152,15 +152,16 @@ class ProductionDesk(QWidget):
         split=QSplitter();left,ll=card();ll.setContentsMargins(16,18,16,16)
         self.search=QLineEdit();self.search.setPlaceholderText('企画・動画名で検索');self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.refresh_projects);ll.addWidget(self.search)
-        self.projects=table(['企画・動画','収録予定','企画の段階','更新']);self.projects.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.projects=table(['企画・動画','収録予定','企画の段階','更新']);self.projects.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.projects.setColumnWidth(1,155);self.projects.setColumnWidth(2,100);self.projects.setColumnWidth(3,95)
         self.projects.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.projects.customContextMenuRequested.connect(self.project_menu)
-        self.projects.itemSelectionChanged.connect(self.select_project)
+        self.projects.currentCellChanged.connect(self.select_project)
+        self.projects.itemSelectionChanged.connect(self.update_delete_button)
         self.projects.cellDoubleClicked.connect(lambda *_:self.protect(self.continue_project))
         ll.addWidget(self.projects)
         row=QHBoxLayout();row.addWidget(self.button('一覧を更新',self.refresh_projects,'Ghost'));row.addStretch()
-        self.delete_button=self.button('選択した動画をゴミ箱へ',self.delete_project,'Ghost');row.addWidget(self.delete_button);ll.addLayout(row)
+        self.delete_button=self.button('選択した作品をゴミ箱へ',lambda:self.editor.delete_projects(self.selected_projects()),'Ghost');row.addWidget(self.delete_button);ll.addLayout(row)
         self.empty=text('まだ企画がありません。\n「新しい企画を作成」から、アイデアを書き始めましょう。','Muted');ll.addWidget(self.empty)
         split.addWidget(left)
         right,rl=card();right.setMinimumWidth(280)
@@ -277,13 +278,25 @@ class ProductionDesk(QWidget):
         elif self.current_page=='media':self.refresh_media()
         self.update_header();return True
 
-    def select_project(self):
+    def selected_projects(self):
+        rows=sorted({index.row() for index in self.projects.selectionModel().selectedRows()})
+        return [self.visible_projects[row] for row in rows if 0<=row<len(self.visible_projects)]
+
+    def update_delete_button(self,*_):
+        if not hasattr(self,'delete_button'):return
+        selected_count=len(self.selected_projects())
+        self.delete_button.setEnabled(selected_count>0 and not self.busy)
+        self.delete_button.setText(f'選択した作品 {selected_count}件をゴミ箱へ' if selected_count>1 else '選択した作品をゴミ箱へ')
+
+    def select_project(self,*_):
         row=self.projects.currentRow()
         if 0<=row<len(self.visible_projects):self.protect(lambda:self.select(self.visible_projects[row]))
 
     def refresh_projects(self,*_):
         from .planning import summary_for
         query=self.search.text().strip().casefold()
+        selected_ids={self.visible_projects[index.row()]['id'] for index in self.projects.selectionModel().selectedRows()
+                      if 0<=index.row()<len(self.visible_projects)} if hasattr(self,'projects') else set()
         self.visible_projects=[p for p in self.workspace.available_projects() if query in p['title'].casefold() or query in summary_for(p).get('title','').casefold()]
         self.projects.blockSignals(True);self.projects.setRowCount(len(self.visible_projects))
         for row,project in enumerate(self.visible_projects):
@@ -294,10 +307,14 @@ class ProductionDesk(QWidget):
             self.projects.setItem(row,2,QTableWidgetItem('メモの読込エラー' if info.get('error') else '概要あり' if info.get('hasSummary') else 'アイデア'))
             updated=project.get('updated','')[:10].replace('-','.')
             self.projects.setItem(row,3,QTableWidgetItem(updated or '—'))
-            if project is self.current:self.projects.selectRow(row)
+            index=self.projects.model().index(row,0)
+            if project['id'] in selected_ids:
+                self.projects.selectionModel().select(index,QItemSelectionModel.SelectionFlag.Select|QItemSelectionModel.SelectionFlag.Rows)
+            if self.current and project['id']==self.current['id']:
+                self.projects.selectionModel().setCurrentIndex(index,QItemSelectionModel.SelectionFlag.NoUpdate)
         self.projects.blockSignals(False)
         self.empty.setVisible(not self.visible_projects)
-        self.delete_button.setEnabled(self.current in self.visible_projects)
+        self.update_delete_button()
 
     def refresh_existing_folders(self):
         if self.current and not self.busy:

@@ -7,7 +7,7 @@ from PySide6.QtCore import QTimer, QUrl, Qt
 from PySide6.QtGui import QGuiApplication, QDesktopServices
 from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QCheckBox, QListWidget, QSplitter, QMenu)
+    QComboBox, QCheckBox, QListWidget, QSplitter, QMenu, QProgressBar)
 from .recording import Recorder
 from .jobs import Jobs
 from .takes import takes_for, publish_take, recover_captures
@@ -49,6 +49,9 @@ class RecordingPanel(QWidget):
         self.elapsed = QLabel('停止中  00:00'); self.elapsed.setStyleSheet('font-size:24px;font-weight:700;padding:10px'); row.addWidget(self.start); row.addWidget(self.stop); row.addWidget(self.elapsed); row.addStretch()
         layout.addLayout(row)
         self.status = QLabel('動画を選び、「収録を開始」を押してください。'); self.status.setWordWrap(True); layout.addWidget(self.status)
+        self.avatar_progress=QProgressBar();self.avatar_progress.setRange(0,100);self.avatar_progress.setValue(0)
+        self.avatar_progress.setFormat('%p%');self.avatar_progress.setTextVisible(True);self.avatar_progress.setFixedHeight(18)
+        self.avatar_progress.hide();layout.addWidget(self.avatar_progress)
         self.warnings = QLabel(); self.warnings.setWordWrap(True); self.warnings.setStyleSheet('color:#9b4500'); layout.addWidget(self.warnings)
         splitter = QSplitter()
         left = QWidget(); left.setObjectName('Card'); ll = QVBoxLayout(left);ll.setContentsMargins(16,18,16,18)
@@ -86,6 +89,8 @@ class RecordingPanel(QWidget):
             rows=re.findall(r'^([0-9.]+)/([0-9.]+)$',tail,re.MULTILINE)
             if rows:
                 current,total=map(float,rows[-1])
+                self.avatar_progress.setValue(max(0,min(100,round(100*current/max(total,1)))))
+                self.avatar_progress.show()
                 self.message(f'透過V体映像を保存中：{current:.0f} / {total:.0f} 秒。元の収録は保存済みです。')
         except OSError:pass
 
@@ -186,7 +191,7 @@ class RecordingPanel(QWidget):
     def save_pose(self):
         if self.motion:
             panel = self.desk.vtuber
-            # Read only the latest smoothed pose; camera inference stays in its local browser.
+            # Read only the latest smoothed pose; camera inference stays in the app.
             self.motion.write(json.dumps({'time':round(time.perf_counter()-self.pose_epoch,6), 'pose':panel.pose.__dict__}, separators=(',',':'))+'\n')
             self.pose_samples += 1
             if self.pose_samples % 25 == 0:self.motion.flush()
@@ -260,6 +265,7 @@ class RecordingPanel(QWidget):
     def job_finished(self, tag, result, error):
         self.desk.capture_badge.setText('収録停止中')
         self.progress_timer.stop()
+        self.avatar_progress.hide()
         self.update_buttons()
         if error:
             self.message(error); self.refresh()
@@ -290,6 +296,7 @@ class RecordingPanel(QWidget):
             for channel in [preview.source_channel,*preview.channels.values()]:
                 if channel.clip and preview.library.assets[channel.clip.asset_id].path==old:channel.clear()
         self.jobs.submit('avatar', lambda cancel: render_avatar_take(folder,take,cancel,force=force or take.get('avatar_pending',False)))
+        self.avatar_progress.setValue(0);self.avatar_progress.show()
         self.progress_timer.start()
         self.message('映像・音声は編集できます。V体の別映像を作成中。完了後に自動で追加します。')
         self.update_buttons()

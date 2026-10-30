@@ -21,7 +21,7 @@ class LivePanel(QWidget):
         self.jobs=Jobs(self);self.jobs.finished.connect(self.saved)
         from .window_source import NativeWindowSource
         self.native_source=NativeWindowSource(self);self.native_source.listed.connect(self.show_windows);self.native_source.frame.connect(self.received_native);self.native_source.failed.connect(self.capture_error)
-        self.capture=QWindowCapture(self);self.capture.setMaximumFrameRate(60)
+        self.capture=QWindowCapture(self)
         self.session=QMediaCaptureSession(self);self.sink=QVideoSink(self);self.session.setWindowCapture(self.capture);self.session.setVideoSink(self.sink)
         self.sink.videoFrameChanged.connect(self.received);self.capture.errorOccurred.connect(self.capture_error)
         outer=QVBoxLayout(self);outer.setContentsMargins(24,18,24,18)
