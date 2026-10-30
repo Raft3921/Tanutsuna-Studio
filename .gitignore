@@ -1,0 +1,16 @@
+vendor/
+dist/
+__pycache__/
+*.pyc
+.DS_Store
+build/
+*.log
+studio/assets/speech/*.bin
+studio/native/desktop-audio
+studio/native/live-window
+studio/native/screen-recorder
+studio/native/whisper-mac/
+studio/native/whisper-win/
+*.blend1
+work/
+たぬつな_キャラクターと個人チャンネル準備.md

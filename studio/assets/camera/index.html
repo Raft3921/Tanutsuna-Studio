@@ -1,0 +1,6 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>たぬつな カメラトラッカー</title><link rel="stylesheet" href="/camera/camera.css"></head><body>
+<main><h1>たぬつな カメラトラッカー</h1><p>制作デスクの3Dたぬきを、顔の向き・位置と口の開閉で操作します。サングラスは固定です。</p>
+<fieldset><legend>カメラ入力</legend><div class="row"><label>使うカメラ <select id="camera-device"><option value="">標準のカメラ</option></select></label><button id="refresh-cameras">カメラ一覧を更新</button></div><div class="row"><button id="start">カメラを開始</button><button id="stop" disabled>停止</button><button id="calibrate" disabled>正面を基準にする</button></div><p id="status" role="status">カメラは停止中です。</p><label><input type="checkbox" id="show-preview">自分のカメラ映像を確認する</label><video id="camera" playsinline muted hidden></video></fieldset>
+<p>この画面を開いたまま、制作デスクに戻ってください。映像の処理はこのPC内で行います。制作デスクに渡すのは顔の動きの数値です。初回はOSのカメラ使用を許可してください。画面を閉じるとカメラは停止します。</p>
+<p>カメラの顔画像は素材に保存しません。独自収録でV体を有効にすると、3Dたぬきを画面録画とは別の素材として保存します。</p>
+</main><script type="module" src="/camera/camera.js"></script></body></html>

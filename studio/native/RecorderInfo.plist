@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.tanutsuna.studio.recorder</string>
+<key>CFBundleName</key><string>Tanutsuna Recorder</string>
+<key>NSMicrophoneUsageDescription</key><string>マイクの声をPC音とは別の音声素材として収録します。</string>
+<key>NSScreenCaptureUsageDescription</key><string>選択した画面全体とPC音を動画の素材として保存します。</string>
+</dict></plist>

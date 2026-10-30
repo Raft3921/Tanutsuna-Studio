@@ -1,0 +1,18 @@
+{
+  "version": "v1.9.2",
+  "model": "tiny-q5_1 multilingual",
+  "sources": {
+    "windows.zip": {
+      "url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip",
+      "sha256": "49dcc16de826f20bd53d44f947a1ae49dfa81f86cad67a64d80820cb192d674a"
+    },
+    "source.tar.gz": {
+      "url": "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.2.tar.gz",
+      "sha256": "a6abd064fcca8b85e794d205abf328c522e9451db43a3eadc178b883b7d0e9cd"
+    },
+    "model.bin": {
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
+      "sha256": "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7"
+    }
+  }
+}
