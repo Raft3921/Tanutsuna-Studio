@@ -217,7 +217,7 @@ def _download(release: dict, destination: Path, progress=None) -> None:
     _emit_progress(progress, 100, "更新ファイルの検証が完了しました。")
 
 
-def _extract_windows(archive: zipfile.ZipFile, stage: Path, entries, progress=None) -> None:
+def _extract_windows(archive: zipfile.ZipFile, stage: Path, entries, progress=None, start=0, end=95) -> None:
     files = [(member, name) for member, name, is_link in entries if not is_link]
     total = sum(member.file_size for member, _ in files) or 1
     copied = 0
@@ -232,7 +232,7 @@ def _extract_windows(archive: zipfile.ZipFile, stage: Path, entries, progress=No
             while chunk := source.read(1024 * 1024):
                 output.write(chunk)
                 copied += len(chunk)
-                value = int(95 * copied / total)
+                value = start + int((end - start) * copied / total)
                 if value != last:
                     _emit_progress(progress, value, f"更新ファイルを展開中: {copied // (1024 * 1024)} / {total // (1024 * 1024)} MB")
                     last = value
@@ -241,7 +241,7 @@ def _extract_windows(archive: zipfile.ZipFile, stage: Path, entries, progress=No
             target.chmod(mode & 0o777)
 
 
-def _extract_mac(package: Path, stage: Path, progress=None) -> None:
+def _extract_mac(package: Path, stage: Path, progress=None, start=0, end=95) -> None:
     """Use ditto so app-bundle links, executable bits, and resource forks survive."""
     process = subprocess.Popen(["/usr/bin/ditto", "-V", "-x", "-k", str(package), str(stage)],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -255,14 +255,14 @@ def _extract_mac(package: Path, stage: Path, progress=None) -> None:
     assert process.stdout is not None
     for _line in process.stdout:
         completed += 1
-        value = min(95, int(95 * completed / total))
+        value = min(end, start + int((end - start) * completed / total))
         if value != last:
             _emit_progress(progress, value, f"Macアプリを展開中: {min(completed, total)} / {total} ファイル")
             last = value
     code = process.wait()
     if code:
         raise RuntimeError(f"macOS標準のアーカイブ展開に失敗しました（終了コード {code}）。")
-    _emit_progress(progress, 96, "Macアプリの実行属性とリソースを復元しました。")
+    _emit_progress(progress, end + 1, "Macアプリの実行属性とリソースを復元しました。")
 
 
 def _data_root() -> Path:
@@ -274,6 +274,19 @@ def install_and_restart(release: dict, package: Path, current_pid: int, progress
     target = installation_root()
     if target is None:
         raise RuntimeError("この起動方式は自動更新に対応していません。Releaseページから更新してください。")
+    if not package.is_file():
+        raise RuntimeError("検証済みの更新ファイルが見つかりません。先に更新をダウンロードしてください。")
+    total = max(1, package.stat().st_size)
+    digest = hashlib.sha256();checked = 0;last = -1
+    with package.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk);checked += len(chunk)
+            value = int(5 * checked / total)
+            if value != last:
+                _emit_progress(progress, value, "適用前に更新ファイルを再確認中…")
+                last = value
+    if digest.hexdigest().lower() != release.get("sha256", "").lower():
+        raise RuntimeError("保存済み更新ファイルが変更されています。もう一度ダウンロードしてください。")
     token = uuid.uuid4().hex
     data = _data_root()
     data.mkdir(parents=True, exist_ok=True)
@@ -285,9 +298,9 @@ def install_and_restart(release: dict, package: Path, current_pid: int, progress
         is_mac = packaged_platform() == "macOS-arm64"
         entries = _safe_zip_entries(archive, allow_symlinks=is_mac)
         if is_mac:
-            _extract_mac(package, stage, progress)
+            _extract_mac(package, stage, progress, start=5, end=95)
         else:
-            _extract_windows(archive, stage, entries, progress)
+            _extract_windows(archive, stage, entries, progress, start=5, end=95)
     marker = data / "update-boot.json"
     marker.unlink(missing_ok=True)
     if sys.platform == "darwin":
