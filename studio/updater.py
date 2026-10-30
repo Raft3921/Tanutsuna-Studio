@@ -129,7 +129,10 @@ def _download(release: dict, destination: Path) -> None:
             app_dirs = {name.split("/")[0] for name in names if name.endswith(".app/Contents/Info.plist")}
             if len(app_dirs) != 1:
                 raise RuntimeError("Mac更新ZIPにアプリ本体が1つ含まれていません。")
-            plist_path = next(name for name in names if name.endswith(".app/Contents/Info.plist"))
+            app_root = next(iter(app_dirs))
+            plist_path = f"{app_root}/Contents/Info.plist"
+            if plist_path not in names:
+                raise RuntimeError("Mac更新アプリのInfo.plistがありません。")
             info = plistlib.loads(archive.read(plist_path))
             if info.get("CFBundleShortVersionString") != release["version"].lstrip("v"):
                 raise RuntimeError("Mac更新アプリの版数が一致しません。")
