@@ -44,6 +44,14 @@ PATCHES = {
         ('                if clip.track < 0:\n                    continue\n                asset = self.library.assets[clip.asset_id]',
          '                asset = self.library.assets[clip.asset_id]\n                if not asset.has_video:\n                    continue'),
     ],
+    'title_editor.py': [
+        ("        motion_layout.addLayout(key_row)\n        preset_row = QHBoxLayout()",
+         "        motion_layout.addLayout(key_row)\n        adjust_form = QFormLayout()\n        self.adjust_sliders = {}\n        for name, label, minimum, maximum, scale in [('x','左右位置',-100000,100000,1),('y','上下位置',-100000,100000,1),('scale','大きさ',10,400,100),('rotation','角度',-180,180,1)]:\n            slider = QSlider(Qt.Orientation.Horizontal); slider.setRange(minimum, maximum); slider.setTracking(True)\n            slider.valueChanged.connect(lambda value, name=name, scale=scale: self.adjust_selected_key(name, value / scale))\n            self.adjust_sliders[name] = slider; adjust_form.addRow(label, slider)\n        motion_layout.addLayout(adjust_form)\n        preset_row = QHBoxLayout()"),
+        ("        if self.keys.rowCount():\n            self.keys.selectRow(0)",
+         "        if self.keys.rowCount():\n            self.keys.selectRow(0)\n        selected = sorted(data['keys'], key=lambda k:k['frame'])\n        key = selected[self.keys.currentRow()] if 0 <= self.keys.currentRow() < len(selected) else {}\n        for name, slider in self.adjust_sliders.items():\n            factor = 100 if name == 'scale' else 1\n            slider.blockSignals(True); slider.setValue(round(key.get(name, 1 if name == 'scale' else 0) * factor)); slider.blockSignals(False)"),
+        ('    def motion_preset(self, preset):',
+         "    def adjust_selected_key(self, name, value):\n        phase = self.spec['motion'][self.phase.currentData()]\n        ordered = sorted(phase['keys'], key=lambda k:k['frame'])\n        row = self.keys.currentRow()\n        if 0 <= row < len(ordered):\n            ordered[row][name] = value\n            self.phase_seek(ordered[row]['frame']); self.render()\n\n    def motion_preset(self, preset):"),
+    ],
 }
 
 

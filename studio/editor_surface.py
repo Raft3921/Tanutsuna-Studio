@@ -1,8 +1,9 @@
 """The full editor embedded in the project shell, with one managed save target."""
 from pathlib import Path
+from copy import deepcopy
 from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QToolBar, QFileDialog, QInputDialog, QApplication, QWidget, QPushButton, QMenu
+from PySide6.QtWidgets import QToolBar, QFileDialog, QInputDialog, QApplication, QWidget, QPushButton, QMenu, QMessageBox
 from cutraft.app import MainWindow
 from cutraft.model import Sequence, uid
 
@@ -75,7 +76,9 @@ class EditorSurface(MainWindow):
         toolbar.addAction('素材を追加',self.import_assets)
         toolbar.addSeparator()
         automation=self.menuBar().addMenu('自動編集')
-        for title,method in [('無音カット',self.open_silence),('音量・BGM',self.open_mixer),('選択した映像と音をまとめる',self.make_compound)]:
+        for title,method in [('自動文字起こし・仮テロップ',self.open_transcription),
+                             ('選択テロップのデザインを一括変更',self.replace_caption_style),
+                             ('無音カット',self.open_silence),('音量・BGM',self.open_mixer),('選択した映像と音をまとめる',self.make_compound)]:
             automation.addAction(title,method);toolbar.addAction(title,method)
         toolbar.addSeparator();toolbar.addAction(self.mp4_export_action)
         self.export_button.hide()
@@ -88,6 +91,41 @@ class EditorSurface(MainWindow):
         if self.shell.desk.busy:self.statusBar().showMessage('収録や素材の処理を完了してから実行してください。');return
         from .audio_dialogs import SilenceDialog
         SilenceDialog(self).exec()
+
+    def open_transcription(self):
+        if self.shell.desk.busy:
+            self.statusBar().showMessage('収録や素材の処理を完了してから実行してください。');return
+        from .transcription_dialog import TranscriptionDialog
+        TranscriptionDialog(self).exec()
+
+    def replace_caption_style(self):
+        clips=[clip for clip in self.selected_clips()
+               if self.library.assets[clip.asset_id].kind=='title']
+        if not clips:
+            QMessageBox.information(self,'テロップのデザイン','タイムラインでテロップを選択してください。複数選択したテロップにまとめて適用できます。')
+            return
+        from cutraft.workspace import title_templates, workspace_root
+        templates=title_templates(workspace_root())
+        if not templates:
+            QMessageBox.information(self,'テロップのデザイン','先に「テロップ作成」からデザインを登録してください。登録した後、同じ操作で選択中のテロップへ一括適用できます。')
+            return
+        names=[row[0] for row in templates]
+        name,ok=QInputDialog.getItem(self,'テロップのデザインを一括変更',
+            f'選択中の{len(clips)}個に適用するデザイン',names,0,False)
+        if not ok:return
+        template=deepcopy(templates[names.index(name)][1])
+        sequence=self.sequence
+        def apply():
+            for clip in clips:
+                asset=self.library.assets[clip.asset_id]
+                current=clip.title or asset.payload
+                spec=deepcopy(template)
+                spec['text']=current.get('text',asset.label or 'テロップ')
+                spec['canvas']=[sequence.width,sequence.height]
+                clip.title=spec
+        if self.commit('選択テロップのデザインを一括変更',apply):
+            self.preview.sync(True);self.preview.video.update()
+            self.statusBar().showMessage(f'{len(clips)}個のテロップに「{name}」を適用しました。',5000)
 
     def open_mixer(self):
         if self.shell.desk.busy:self.statusBar().showMessage('収録や素材の処理を完了してから実行してください。');return

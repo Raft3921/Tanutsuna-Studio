@@ -41,6 +41,7 @@ def run_command(args, log, cancel=None, cwd=None):
 class Jobs(QObject):
     delivered = Signal(object)
     finished = Signal(object, object, str)
+    progress = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)

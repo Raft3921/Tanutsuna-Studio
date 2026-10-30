@@ -34,7 +34,7 @@ def main():
     source=BUILD/'whisper.cpp-1.9.2'
     shutil.copy2(source/'LICENSE',speech/'WHISPER-LICENSE.txt')
     if sys.platform=='darwin':
-        subprocess.run(['cmake','-S',str(source),'-B',str(BUILD/'mac'),'-DCMAKE_BUILD_TYPE=Release','-DBUILD_SHARED_LIBS=OFF','-DWHISPER_BUILD_TESTS=OFF','-DGGML_METAL=OFF'],check=True)
+        subprocess.run(['cmake','-S',str(source),'-B',str(BUILD/'mac'),'-DCMAKE_BUILD_TYPE=Release','-DBUILD_SHARED_LIBS=OFF','-DWHISPER_BUILD_TESTS=OFF','-DGGML_METAL=ON'],check=True)
         subprocess.run(['cmake','--build',str(BUILD/'mac'),'--target','whisper-cli','-j','2'],check=True)
         mac=ROOT/'studio/native/whisper-mac';mac.mkdir(parents=True,exist_ok=True)
         shutil.copy2(BUILD/'mac/bin/whisper-cli',mac/'whisper-cli')

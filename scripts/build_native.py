@@ -17,7 +17,11 @@ DESTINATION = ROOT / 'dist/Tanutsuna-Studio-Windows11-x64'
 
 
 def ignore(folder, names):
-    return [n for n in names if n in ('.DS_Store', '__pycache__', 'whisper-mac', 'whisper-win', 'speech') or n.endswith(('.pyc', '.blend', '.blend1')) or n in ('screen-recorder','desktop-audio','live-window')]
+    folder = Path(folder)
+    return [n for n in names if n in ('.DS_Store', '__pycache__', 'whisper-mac')
+            or (n == 'speech' and folder != ROOT / 'studio' / 'assets')
+            or n.endswith(('.pyc', '.blend', '.blend1', '.bin'))
+            or n in ('screen-recorder','desktop-audio','live-window')]
 
 
 def prepare():

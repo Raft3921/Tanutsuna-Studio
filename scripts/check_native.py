@@ -34,8 +34,9 @@ for name in ['QtWebEngineCore.pyd','QtWebEngineWidgets.pyd','QtWebEngineProcess.
     assert not (bundle/'runtime/Lib/site-packages/PySide6'/name).exists(),name
 for name in ['app/studio/native/Loopback.cs','app/studio/native/LiveLoopback.cs','runtime/Lib/site-packages/av/__init__.py']:
     assert (bundle/name).is_file(), name
-assert not (bundle/'app/studio/assets/speech').exists(), 'Unused speech model remains'
-assert not (bundle/'app/studio/native/whisper-win').exists(), 'Unused speech engine remains'
+assert (bundle/'app/studio/assets/speech/WHISPER-LICENSE.txt').is_file(), 'Whisper license missing'
+assert (bundle/'app/studio/native/whisper-win/whisper-cli.exe').is_file(), 'Whisper engine missing'
+assert not list((bundle/'app/studio/assets/speech').glob('*.bin')), 'Optional speech model should download on demand'
 with zipfile.ZipFile(archive) as zipped:
     assert zipped.testzip() is None
     for file in ['Tanutsuna Studio.exe', 'app/launch.py', 'app/studio/desk.py', 'app/cutraft/app.py', 'studio-manifest.json']:

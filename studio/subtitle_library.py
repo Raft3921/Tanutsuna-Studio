@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -70,6 +71,72 @@ def parse_srt(path):
     return cues
 
 
+def _srt_time(seconds):
+    millis = max(0, round(seconds * 1000))
+    hours, millis = divmod(millis, 3_600_000)
+    minutes, millis = divmod(millis, 60_000)
+    whole, millis = divmod(millis, 1000)
+    return f'{hours:02}:{minutes:02}:{whole:02},{millis:03}'
+
+
+def save_generated(project, entries):
+    from .workspace import atomic_text
+    folder = shelf(project)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    destination = folder / f'自動文字起こし-{stamp}.srt'
+    content = '\n\n'.join(f'{index}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}'
+                           for index, (start, end, text) in enumerate(entries, 1)) + '\n'
+    atomic_text(destination, content)
+    return destination
+
+
+def add_entries(editor, entries):
+    sequence = editor.sequence
+    rate = sequence.rate
+    created = []
+
+    def apply():
+        for start_sec, end_sec, caption in entries:
+            start = max(0, round(start_sec * rate))
+            end = max(start + 1, round(end_sec * rate))
+            duration = end - start
+            track = next((candidate for candidate in range(1, sequence.video_tracks)
+                          if all(c.track != candidate or c.end <= start or c.start >= end
+                                 for c in sequence.clips)), None)
+            if track is None:
+                if sequence.video_tracks >= 16:
+                    raise ValueError('字幕の重なりが多く、映像レイヤーの上限を超えました。')
+                track = sequence.video_tracks
+                sequence.video_tracks += 1
+            spec = default_title(caption)
+            spec['canvas'] = [sequence.width, sequence.height]
+            spec['size'] = max(36, round(sequence.height * .052))
+            spec['motion'] = {
+                'in': {'duration': 0, 'keys': []},
+                'middle': {'duration': 1, 'keys': [{'frame': 0, 'x': 0., 'y': sequence.height * .36,
+                                                     'scale': 1., 'rotation': 0., 'opacity': 1.}]},
+                'out': {'duration': 0, 'keys': []},
+            }
+            asset = Asset(uid(), '', round(duration * 1000 / rate), sequence.width, sequence.height,
+                          sequence.fps_num, sequence.fps_den, False, True, 'title', spec, caption[:50])
+            editor.library.assets[asset.id] = asset
+            clip = Clip(uid(), asset.id, start, 0, duration, track=track, title=spec)
+            sequence.clips.append(clip)
+            created.append(clip.id)
+            event = next((e for e in editor.library.events if e.id == editor.library.active_event_id), None)
+            if event:
+                event.asset_ids.append(asset.id)
+
+    if editor.commit('字幕をタイムラインに追加', apply):
+        editor.timeline.selected_ids = set(created)
+        editor.timeline.selected_id = created[-1] if created else ''
+        editor.timeline.update()
+        editor.preview.seek(min((round(start * rate) for start, _, _ in entries), default=0))
+        editor.statusBar().showMessage(f'{len(created)} 個の仮テロップを追加しました。', 5000)
+        return created
+    return []
+
+
 class SubtitleLibrary(QDialog):
     def __init__(self, editor):
         super().__init__(editor)
@@ -127,8 +194,6 @@ class SubtitleLibrary(QDialog):
             QMessageBox.information(self, '字幕ライブラリ', '追加する字幕を選んでください。')
             return
         editor = self.editor
-        sequence = editor.sequence
-        rate = sequence.rate
         entries = []
         try:
             for path in paths:
@@ -139,43 +204,8 @@ class SubtitleLibrary(QDialog):
         if not entries:
             QMessageBox.information(self, '字幕ライブラリ', '選んだファイルに字幕がありません。')
             return
-
-        def apply():
-            # Subtitle overlays occupy the upper video layers and automatically
-            # share a layer only when their time ranges do not overlap.
-            for start_sec, end_sec, caption in entries:
-                start = max(0, round(start_sec * rate))
-                end = max(start + 1, round(end_sec * rate))
-                duration = end - start
-                track = next((candidate for candidate in range(1, sequence.video_tracks)
-                              if all(c.track != candidate or c.end <= start or c.start >= end
-                                     for c in sequence.clips)), None)
-                if track is None:
-                    if sequence.video_tracks >= 16:
-                        raise ValueError('字幕の重なりが多く、映像レイヤーの上限を超えました。')
-                    track = sequence.video_tracks
-                    sequence.video_tracks += 1
-                spec = default_title(caption)
-                spec['canvas'] = [sequence.width, sequence.height]
-                spec['size'] = max(36, round(sequence.height * .052))
-                spec['motion'] = {
-                    'in': {'duration': 0, 'keys': []},
-                    'middle': {'duration': 1, 'keys': [{'frame': 0, 'x': 0., 'y': sequence.height * .36,
-                                                         'scale': 1., 'rotation': 0., 'opacity': 1.}]},
-                    'out': {'duration': 0, 'keys': []},
-                }
-                asset = Asset(uid(), '', round(duration * 1000 / rate), sequence.width, sequence.height,
-                              sequence.fps_num, sequence.fps_den, False, True, 'title', spec, caption[:50])
-                editor.library.assets[asset.id] = asset
-                sequence.clips.append(Clip(uid(), asset.id, start, 0, duration, track=track, title=spec))
-                event = next((e for e in editor.library.events if e.id == editor.library.active_event_id), None)
-                if event:
-                    event.asset_ids.append(asset.id)
-
         try:
-            if editor.commit('字幕をタイムラインに追加', apply):
-                editor.preview.seek(min((round(start * rate) for start, _, _ in entries), default=0))
-                editor.statusBar().showMessage(f'{len(entries)} 個の字幕を追加しました。', 5000)
-            self.accept()
+            if add_entries(editor, entries):
+                self.accept()
         except ValueError as exc:
             QMessageBox.warning(self, '字幕を追加できません', str(exc))

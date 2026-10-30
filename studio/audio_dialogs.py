@@ -21,6 +21,11 @@ class SilenceDialog(QDialog):
         layout.addWidget(note('声の休止区間を調べ、画面・PC音・マイク・V体・BGMを同じ時間でカットします。後ろの素材も一緒に前へ詰めます。元ファイルは保持し、編集の「元に戻す」で取り消せます。'))
         layout.addWidget(note('解析対象は現在開いている編集版です。複合クリップは中を開いて実行します。同じ複合クリップを使う親の編集版も同期して短縮します。音量変更・ミュート前の元音声を解析します。'))
         form=QFormLayout();self.reference=QComboBox();paths=role_paths(editor.shell.desk.selected_project())
+        self.preset=QComboBox()
+        self.preset.addItem('おすすめ（会話を残してカット）',(-38,.7,.12))
+        self.preset.addItem('ゆったり（短い間は残す）',(-45,1.0,.20))
+        self.preset.addItem('テンポ重視（間を多めにカット）',(-32,.45,.08))
+        form.addRow('カットの強さ',self.preset)
         self.voices=[]
         for clip in editor.sequence.ordered():
             asset=editor.library.assets[clip.asset_id]
@@ -35,6 +40,7 @@ class SilenceDialog(QDialog):
         self.threshold=QDoubleSpinBox();self.threshold.setRange(-70,-10);self.threshold.setValue(-38);self.threshold.setSuffix(' dB')
         self.minimum=QDoubleSpinBox();self.minimum.setRange(.2,10);self.minimum.setValue(.7);self.minimum.setSuffix(' 秒')
         self.padding=QDoubleSpinBox();self.padding.setRange(0,1);self.padding.setValue(.12);self.padding.setSuffix(' 秒')
+        self.preset.currentIndexChanged.connect(self.apply_preset)
         for title,field in [('無音とみなす音量以下',self.threshold),('無音の最小の長さ',self.minimum),('言葉の前後に残す余白',self.padding)]:form.addRow(title,field)
         layout.addLayout(form)
         self.status=note('解析後に短縮時間を確認してから適用できます。');layout.addWidget(self.status);layout.addStretch()
@@ -46,6 +52,12 @@ class SilenceDialog(QDialog):
         for field in (self.reference,self.threshold,self.minimum,self.padding):
             signal=field.currentIndexChanged if field is self.reference else field.valueChanged
             signal.connect(self.invalidate)
+
+    def apply_preset(self,index):
+        values=self.preset.itemData(index)
+        if not values:return
+        for field,value in zip((self.threshold,self.minimum,self.padding),values):
+            field.setValue(value)
 
     def invalidate(self,*_):
         self.ranges=[];self.apply.setEnabled(False)

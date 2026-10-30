@@ -39,7 +39,7 @@ def build():
                 args += ['--add-data', str(ROOT/'studio/assets'/name/filename) + ':studio/assets/'+name]
         else:
             args += ['--add-data', str(ROOT/'studio/assets'/name) + ':studio/assets/'+name]
-    args += ['--add-binary', str(native/'screen-recorder')+':studio/native','--add-binary',str(native/'desktop-audio')+':studio/native','--add-binary',str(native/'live-window')+':studio/native']
+    args += ['--add-binary', str(native/'screen-recorder')+':studio/native','--add-binary',str(native/'desktop-audio')+':studio/native','--add-binary',str(native/'live-window')+':studio/native', '--add-binary',str(native/'whisper-mac/whisper-cli')+':studio/native/whisper-mac', '--add-data',str(ROOT/'studio/assets/speech/WHISPER-LICENSE.txt')+':studio/native']
     for module in ('PySide6.QtWebEngineCore','PySide6.QtWebEngineWidgets','PySide6.QtWebEngineQuick', 'tkinter', 'unittest'):
         args += ['--exclude-module', module]
     subprocess.run([*args, str(ROOT / 'run.py')], cwd=ROOT, check=True)
