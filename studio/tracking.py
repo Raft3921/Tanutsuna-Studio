@@ -23,7 +23,8 @@ class Pose:
     headX: float = 0
     headY: float = 0
     headZ: float = 0
-    jawOpen: float = .60
+    # A neutral / not-yet-tracking face must have a closed mouth.
+    jawOpen: float = 0
     eyeBlinkLeft: float = 0
     eyeBlinkRight: float = 0
     eyeWideLeft: float = 0

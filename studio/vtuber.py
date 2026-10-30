@@ -229,7 +229,7 @@ class VtuberPanel(QWidget):
             target=Pose(**{**raw.__dict__,'yaw':max(-65,min(65,(raw.yaw-self.neutral[0])*gain)),
                 'pitch':max(-40,min(40,(raw.pitch-self.neutral[1])*gain)),'roll':max(-40,min(40,(raw.roll-self.neutral[2])*gain)),
                 'headX':max(-.65,min(.65,raw.headX*move)),'headY':max(-.45,min(.45,raw.headY*move)),
-                'headZ':max(-.55,min(.55,raw.headZ*move)), 'jawOpen':min(1,max(0,raw.jawOpen)*self.mouth_gain.value())}) if detected else Pose(jawOpen=.12)
+                'headZ':max(-.55,min(.55,raw.headZ*move)), 'jawOpen':min(1,max(0,raw.jawOpen)*self.mouth_gain.value())}) if detected else Pose(jawOpen=0)
             self.status.setText(('カメラ追跡中' if detected else '追跡信号なし・待機姿勢')+f'  左右 {self.pose.yaw:.0f}° / 上下 {self.pose.pitch:.0f}° / 傾き {self.pose.roll:.0f}°')
         elif mode==1:
             target=Pose(yaw=math.sin(t*.8)*32,pitch=math.sin(t*1.1)*16,roll=math.sin(t*.6)*12,

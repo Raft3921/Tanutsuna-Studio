@@ -3,7 +3,7 @@ const $=id=>document.getElementById(id), token=new URLSearchParams(location.hash
 let preferredLabel=new URLSearchParams(location.hash.slice(1)).get('camera')||'';
 let preferredMicrophone=new URLSearchParams(location.hash.slice(1)).get('microphone')||'';
 let detector, stream, audioContext, audioAnalyser, audioSamples, running=false, audioReady=false, audioNoise=.002, audioMouth=0;
-let generation=0, baseline=null, busy=false, lastVideo=-1;
+let generation=0, baseline=null, busy=false, lastVideo=-1, noiseHistory=[];
 const sensitivity=$('speech-sensitivity'),queryGain=Number(new URLSearchParams(location.hash.slice(1)).get('voiceGain'));
 if(sensitivity){const saved=localStorage.getItem('speech-sensitivity');if(Number.isFinite(queryGain)&&queryGain>0)sensitivity.value=String(Math.max(.5,Math.min(5,queryGain)));else if(saved)sensitivity.value=saved;}
 function showSensitivity(){ $('speech-sensitivity-value').value=Number(sensitivity.value).toFixed(1);localStorage.setItem('speech-sensitivity',sensitivity.value); }
@@ -13,11 +13,18 @@ function speechMouth(){
   audioAnalyser.getFloatTimeDomainData(audioSamples);
   let sum=0;for(const sample of audioSamples)sum+=sample*sample;
   const rms=Math.sqrt(sum/audioSamples.length);
-  if(rms<audioNoise*1.6)audioNoise+=(rms-audioNoise)*(rms<audioNoise ? .04 : .006);
-  const gate=Math.max(.0008,audioNoise*1.35), ceiling=Math.max(.012,gate*6);
+  // Track the recent quiet floor, including microphones with a steady hiss.
+  // The old estimator only moved upward below 1.6x its initial value, so a
+  // slightly noisy mic could be interpreted as continuous speech forever.
+  noiseHistory.push(rms);if(noiseHistory.length>120)noiseHistory.shift();
+  if(noiseHistory.length>=12){
+    const sorted=[...noiseHistory].sort((a,b)=>a-b);
+    audioNoise=sorted[Math.floor((sorted.length-1)*.15)];
+  }else if(rms<audioNoise)audioNoise+=(rms-audioNoise)*.12;
+  const gate=Math.max(.0025,audioNoise*1.7), ceiling=Math.max(gate+.008,audioNoise*5);
   const activity=Math.max(0,Math.min(1,(rms-gate)/(ceiling-gate)));
-  const target=Math.min(.82,Math.sqrt(activity)*.28*Number(sensitivity.value));
-  audioMouth+=(target>audioMouth ? .58 : .24)*(target-audioMouth);
+  const target=Math.min(.28,Math.sqrt(activity)*.065*Number(sensitivity.value));
+  audioMouth+=(target>audioMouth ? .42 : .18)*(target-audioMouth);
   return audioMouth;
 }
 async function startAudio(stream){
@@ -29,7 +36,7 @@ async function startAudio(stream){
   const lowpass=audioContext.createBiquadFilter();lowpass.type='lowpass';lowpass.frequency.value=3600;
   audioAnalyser=audioContext.createAnalyser();audioAnalyser.fftSize=512;audioAnalyser.smoothingTimeConstant=.15;
   source.connect(highpass);highpass.connect(lowpass);lowpass.connect(audioAnalyser);
-  audioSamples=new Float32Array(audioAnalyser.fftSize);audioNoise=.002;audioMouth=0;audioReady=true;
+  audioSamples=new Float32Array(audioAnalyser.fftSize);audioNoise=.002;audioMouth=0;noiseHistory=[];audioReady=true;
   return true;
 }
 async function stopAudio(){
