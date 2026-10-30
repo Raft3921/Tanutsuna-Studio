@@ -8,6 +8,7 @@ import platform
 import re
 import subprocess
 import sys
+import stat
 import urllib.error
 import urllib.request
 import uuid
@@ -108,7 +109,10 @@ def _download(release: dict, destination: Path) -> None:
         if bad:
             raise RuntimeError(f"ZIPの検証に失敗しました: {bad}")
         for member in archive.infolist():
-            target = (destination.parent / "inspect" / member.filename).resolve()
+            if stat.S_ISLNK(member.external_attr >> 16):
+                raise RuntimeError("配布ZIPにシンボリックリンクが含まれています。")
+            normalized = member.filename.replace("\\", "/")
+            target = (destination.parent / "inspect" / normalized).resolve()
             if not target.is_relative_to((destination.parent / "inspect").resolve()):
                 raise RuntimeError("配布ZIPに許可されないパスが含まれています。")
         names = archive.namelist()
@@ -169,8 +173,11 @@ set -eu
 target=$1; candidate=$2; backup=$3; marker=$4; token=$5; pid=$6; work=$7
 tries=0
 while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 90 ]; do sleep 1; tries=$((tries+1)); done
-[ ! -e "$target" ] || mv "$target" "$backup"
-if ! ditto "$candidate" "$target"; then [ ! -e "$target" ] || rm -rf "$target"; [ ! -e "$backup" ] || mv "$backup" "$target"; exit 1; fi
+if [ -e "$target" ] && ! mv "$target" "$backup"; then open -a "$target"; exit 1; fi
+if ! ditto "$candidate" "$target"; then
+  if [ -e "$backup" ]; then [ ! -e "$target" ] || rm -rf "$target"; mv "$backup" "$target"; fi
+  open -a "$target"; exit 1
+fi
 open -a "$target" --args --update-token "$token"
 tries=0
 while [ "$tries" -lt 90 ]; do
@@ -207,8 +214,10 @@ try {
   }
   throw 'Updated app did not report successful startup'
 } catch {
-  if (Test-Path $Target) { Remove-Item $Target -Recurse -Force }
-  if (Test-Path $Backup) { Move-Item -LiteralPath $Backup -Destination $Target }
+  if (Test-Path $Backup) {
+    if (Test-Path $Target) { Remove-Item $Target -Recurse -Force }
+    Move-Item -LiteralPath $Backup -Destination $Target
+  }
   if (Test-Path (Join-Path $Target 'Tanutsuna Studio.exe')) { Start-Process (Join-Path $Target 'Tanutsuna Studio.exe') }
   exit 2
 }
