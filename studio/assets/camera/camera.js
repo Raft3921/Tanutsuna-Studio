@@ -96,7 +96,7 @@ function describeCameraError(error){
   const name=error?.name||'Error',message=error?.message||String(error);
   if(name==='NotAllowedError'){
     const mac=navigator.userAgent.toLowerCase().includes('mac');
-    const help=mac?'macOS「システム設定 ＞ プライバシーとセキュリティ ＞ カメラ」で「たぬつな Studio」を許可してください。':'OSのプライバシー設定で、このアプリのカメラ利用を許可してください。';
+    const help=mac?'macOS「システム設定 ＞ プライバシーとセキュリティ ＞ カメラ」で、このブラウザーを許可してください。':'OSのプライバシー設定で、このブラウザーのカメラ利用を許可してください。';
     return `カメラへのアクセスが拒否されました。${help} 詳細: ${message}`;
   }
   if(name==='NotFoundError')return 'カメラが見つかりません。接続と選択中のカメラを確認してください。詳細: '+message;

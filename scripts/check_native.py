@@ -31,7 +31,7 @@ for source in (ROOT / 'editor_overrides').glob('*.py'):
 assert 'from studio.main import main' in (bundle / 'app/launch.py').read_text(encoding='utf-8')
 assert archive.stat().st_size < 450_000_000
 for name in ['QtWebEngineCore.pyd','QtWebEngineWidgets.pyd','QtWebEngineProcess.exe','Qt6WebEngineCore.dll']:
-    assert (bundle/'runtime/Lib/site-packages/PySide6'/name).is_file(),name
+    assert not (bundle/'runtime/Lib/site-packages/PySide6'/name).exists(),name
 for name in ['app/studio/native/Loopback.cs','app/studio/native/LiveLoopback.cs','runtime/Lib/site-packages/av/__init__.py']:
     assert (bundle/name).is_file(), name
 assert not (bundle/'app/studio/assets/speech').exists(), 'Unused speech model remains'

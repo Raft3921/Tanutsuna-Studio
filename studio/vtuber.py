@@ -4,7 +4,7 @@ import math
 import shutil
 import time
 from datetime import datetime
-from PySide6.QtCore import Qt, QTimer, QUrl, QSettings, QCameraPermission
+from PySide6.QtCore import Qt, QTimer, QUrl, QSettings
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QApplication,QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QGroupBox,
     QLabel,QPushButton,QComboBox,QSlider,QCheckBox,QFileDialog,QMessageBox,QSplitter,QDoubleSpinBox,QScrollArea)
@@ -39,7 +39,7 @@ class VtuberPanel(QWidget):
                     self.mouth_shapes[vowel]=(max(.55,min(1.9,width)),max(.15,min(1.3,height)))
         except (ValueError,TypeError):pass
         self.pose=Pose();self.neutral=[0,0,0];self.last=time.monotonic();self.epoch=self.last
-        self._last_camera_label='';self._last_microphone_label='';self._camera_permission_pending=False;self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.camera_window=None
+        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None
         self.setMinimumHeight(420)
         outer=QVBoxLayout(self)
         controls=QHBoxLayout()
@@ -109,7 +109,7 @@ class VtuberPanel(QWidget):
         self.status=QLabel('手動で3Dモデルの可動部を確認できます。カメラは停止中です。')
         self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText)
         outer.addWidget(self.status)
-        help_=QLabel('カメラ追跡：ソフト内のカメラ画面で「カメラを開始」。顔の向き・移動と口の開閉を反映します。サングラスは固定。耳の揺れは補助アニメーションです。')
+        help_=QLabel('カメラ追跡：ボタンで既定のブラウザーを開き、「カメラを開始」。顔の向き・移動と口の開閉を反映します。初回はブラウザーにカメラ許可が必要です。サングラスは固定。耳の揺れは補助アニメーションです。')
         help_.setWordWrap(True);outer.addWidget(help_)
         self.render_status=QLabel('3D描画：互換表示' if self.viewport.software else '3D描画：準備中')
         self.render_status.setWordWrap(True);outer.addWidget(self.render_status)
@@ -136,53 +136,31 @@ class VtuberPanel(QWidget):
 
     def start_tracking(self,checked=False,automatic=False):
         try:
-            app=QApplication.instance();permission=QCameraPermission();permission_status=app.checkPermission(permission)
-            if permission_status==Qt.PermissionStatus.Undetermined:
-                if not self._camera_permission_pending:
-                    self._camera_permission_pending=True
-                    self.status.setText('OSのカメラ許可を確認しています…')
-                    app.requestPermission(permission,self,lambda _result:self._camera_permission_finished(automatic))
-                return True
-            if permission_status==Qt.PermissionStatus.Denied:
-                message='開始できません：OSのカメラ許可がありません。システム設定 ＞ プライバシーとセキュリティ ＞ カメラで「たぬつな Studio」を許可し、アプリを再起動してください。'
-                self.server.state.update({'detected':False,'pose':{},'status':message})
-                self.status.setText(message)
-                if not automatic:QMessageBox.warning(self,'カメラの許可が必要です',message.removeprefix('開始できません：'))
-                return False
             assets=Path(__file__).parent/'assets/tracker'
             if not (assets/'face_landmarker.task').is_file():raise ValueError('追跡モデルがありません。配布ZIPをすべて展開してください。')
             self.server.state.camera_label='';self.server.state.microphone_label='';self._last_camera_label='';self._last_microphone_label=''
             url=self.server.start()
             self.mode.setCurrentIndex(2)
             self.neutral=[0,0,0]
-            if self.camera_window is None:
-                from .camera_window import CameraWindow
-                self.camera_window=CameraWindow(self)
-                self.camera_window.stopped.connect(self.stop_tracking)
-            self.camera_window.open_tracker(url,automatic=automatic)
-            self.status.setText('カメラを自動で準備中。初回のOS許可を確認してください。' if automatic else 'ソフト内のカメラ画面で「カメラを開始」を押してください。')
-            self.start_button.setText('カメラ画面を開く')
+            if automatic:url+='&autostart=1'
+            if not QDesktopServices.openUrl(QUrl(url)):
+                raise RuntimeError('既定のブラウザーを開けませんでした。ブラウザーを起動してから再試行してください。')
+            self.status.setText('ブラウザーでカメラ追跡画面を開きました。初回はブラウザーのカメラ・マイク許可を確認してください。')
+            self.start_button.setText('カメラ追跡画面を開く')
             return True
         except Exception as exc:
             if automatic:raise
             QMessageBox.warning(self,'追跡を開始できません',str(exc));return False
 
-    def _camera_permission_finished(self,automatic):
-        self._camera_permission_pending=False
-        self.start_tracking(automatic=automatic)
-
     def change_camera(self,label):
         if self.server.server is None:return
-        visible=bool(self.camera_window and self.camera_window.isVisible())
-        automatic=bool(self.server.state.camera_label) or not visible
+        automatic=bool(self.server.state.camera_label)
         self.stop_tracking()
         def restart():
             self.start_tracking(automatic=automatic)
-            if visible and self.camera_window:self.camera_window.show()
         QTimer.singleShot(0,restart)
 
     def stop_tracking(self):
-        if self.camera_window:self.camera_window.stop()
         self.server.stop();self.server.state.detected=False
         self.mode.setCurrentIndex(0);self.start_button.setText('カメラ追跡を開始')
         self.status.setText('カメラ入力と追跡を停止しました。')
@@ -278,7 +256,6 @@ class VtuberPanel(QWidget):
             except Exception as exc:QMessageBox.warning(self,'モデルを保存できません',str(exc))
 
     def shutdown(self):
-        if self.camera_window:self.camera_window.stop()
         self.timer.stop();self.server.stop()
         if self.recording:self.recording.close();self.recording=None
         if self.output:self.output.view.release();self.output.close()

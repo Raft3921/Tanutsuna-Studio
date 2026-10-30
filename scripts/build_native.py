@@ -26,22 +26,18 @@ def prepare():
     if VENDOR.exists():
         shutil.rmtree(VENDOR)
     shutil.copytree(BASE, VENDOR, ignore=ignore)
-    # The camera tracker uses Qt's embedded engine, loaded only when requested.
-    cache=ROOT/'build/windows-camera';cache.mkdir(parents=True,exist_ok=True)
-    wheel=cache/'pyside6_webengine-6.12.0.140-cp310-abi3-win_amd64.whl'
-    if not wheel.is_file():
-        subprocess.run([sys.executable,'-m','pip','download','--only-binary=:all:','--no-deps',
-            '--platform','win_amd64','--python-version','314','--implementation','cp','--abi','cp314',
-            '--dest',str(cache),'PySide6-WebEngine==6.12.0.140'],check=True)
-    with zipfile.ZipFile(wheel) as package:
-        for name in package.namelist():
-            if '.debug.' in name or '/QtWebEngineQuick' in name or '/Qt6WebEngineQuick' in name:
-                continue
-            if '/translations/' in name and not name.endswith(('/ja.pak','/en-US.pak')):
-                continue
-            if name.startswith('PySide6/') and (name.endswith(('.dll','.pyd','.exe')) or
-                    name.startswith(('PySide6/resources/','PySide6/translations/'))):
-                package.extract(name,VENDOR/'runtime/Lib/site-packages')
+    # The tracker opens in the system browser, so the multi-hundred-MB Qt WebEngine
+    # runtime is intentionally not part of this portable package.
+    pyside=VENDOR/'runtime/Lib/site-packages/PySide6'
+    for pattern in ('QtWebEngine*.pyd','Qt6WebEngine*.dll','QtWebEngineProcess.exe'):
+        for path in pyside.glob(pattern):path.unlink()
+    for relative in ('resources/qtwebengine_resources.pak','resources/qtwebengine_resources_100p.pak',
+        'resources/qtwebengine_resources_200p.pak','resources/qtwebengine_devtools_resources.pak',
+        'translations/qtwebengine_locales','plugins/webview/qtwebview_webengine.dll',
+        'plugins/designer/qwebengineview.dll','qml/QtWebEngine'):
+        path=pyside/relative
+        if path.is_dir():shutil.rmtree(path)
+        elif path.exists():path.unlink()
     # PyAV and FFmpeg runtime are packaged; clients need no Python installation.
     live_cache=ROOT/'build/windows-live';live_cache.mkdir(parents=True,exist_ok=True)
     live_wheel=live_cache/'av-17.1.0-cp311-abi3-win_amd64.whl'

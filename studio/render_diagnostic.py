@@ -59,23 +59,16 @@ def schedule_vtuber_check(app,window,root):
         else:window.close();app.quit()
     def check_camera():
         panel=window.desk.vtuber
-        panel.start_tracking()
+        panel.start_tracking(automatic=True)
         started=time.monotonic();phase=['load']
-        def received(status):
+        def poll():
             if time.monotonic()-started>45:
-                (root/'camera-error.txt').write_text(str(status),encoding='utf-8')
+                (root/'camera-error.txt').write_text(str(panel.server.state.snapshot()[2]),encoding='utf-8')
                 window.close();app.quit();return
-            if phase[0]=='load' and status:
-                panel.camera_window.view.page().runJavaScript("document.querySelector('#start').click()")
-                phase[0]='start'
-            elif phase[0]=='start' and ('顔を探しています' in status or '追跡中' in status):
-                panel.camera_window.view.page().runJavaScript("document.querySelector('#stop').click()")
-                phase[0]='stop'
-            elif phase[0]=='stop' and '停止しました' in status:
-                (root/'camera-ok.txt').write_text('Embedded camera start/stop OK',encoding='utf-8')
+            if panel.server.state.snapshot()[1]:
+                (root/'camera-ok.txt').write_text('External browser camera tracking connected',encoding='utf-8')
+                panel.stop_tracking()
                 window.close();app.quit();return
             QTimer.singleShot(250,poll)
-        def poll():
-            panel.camera_window.view.page().runJavaScript("document.querySelector('#status')?.textContent || ''",received)
         QTimer.singleShot(500,poll)
     QTimer.singleShot(2600,verify)
