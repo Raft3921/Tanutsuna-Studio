@@ -314,19 +314,26 @@ set -eu
 target=$1; candidate=$2; backup=$3; marker=$4; token=$5; pid=$6; work=$7
 tries=0
 while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 90 ]; do sleep 1; tries=$((tries+1)); done
-if [ -e "$target" ] && ! mv "$target" "$backup"; then open -a "$target"; exit 1; fi
-if ! ditto "$candidate" "$target"; then
-  if [ -e "$backup" ]; then [ ! -e "$target" ] || rm -rf "$target"; mv "$backup" "$target"; fi
-  open -a "$target"; exit 1
-fi
+contents="$target/Contents"; incoming="$target/.Contents-update-$token"; backup_contents="$target/.Contents-previous-$token"
+if [ ! -d "$contents" ] || [ ! -w "$target" ]; then open -a "$target"; exit 1; fi
+if ! ditto "$candidate/Contents" "$incoming"; then rm -rf "$incoming"; open -a "$target"; exit 1; fi
+if ! mv "$contents" "$backup_contents"; then rm -rf "$incoming"; open -a "$target"; exit 1; fi
+if ! mv "$incoming" "$contents"; then mv "$backup_contents" "$contents"; open -a "$target"; exit 1; fi
 open -a "$target" --args --update-token "$token"
 tries=0
 while [ "$tries" -lt 90 ]; do
-  if [ -f "$marker" ] && grep -q "$token" "$marker"; then rm -rf "$backup" "$work"; exit 0; fi
+  if [ -f "$marker" ] && grep -q "$token" "$marker"; then
+    rm -rf "$backup_contents" "$work"
+    for prior in "$(dirname "$work")"/*; do
+      [ "$prior" = "$work" ] && continue
+      [ -f "$prior/install-update.sh" ] && rm -rf "$prior"
+    done
+    exit 0
+  fi
   sleep 1; tries=$((tries+1))
 done
-rm -rf "$target"
-[ ! -e "$backup" ] || mv "$backup" "$target"
+rm -rf "$contents"
+[ ! -e "$backup_contents" ] || mv "$backup_contents" "$contents"
 open -a "$target"
 exit 2
 """, encoding="utf-8")

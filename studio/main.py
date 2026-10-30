@@ -390,7 +390,7 @@ class StudioWindow(QMainWindow):
             self.update_package=Path(result['package'])
             self.desk.update_progress.setValue(100)
             self.desk.update_status.setText(f"{result['version']} をダウンロードし、サイズ・SHA-256・ZIP構成を確認しました。再起動して適用できます。")
-            self.desk.update_download_button.setEnabled(True)
+            self.desk.update_download_button.setEnabled(False)
             self.desk.update_install_button.setEnabled(True)
         elif action=='install' and result.get('restarting'):
             self.desk.update_progress.setValue(100)
