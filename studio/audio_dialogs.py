@@ -115,11 +115,11 @@ class MixerDialog(QDialog):
         rl.addWidget(self.table);tabs.addTab(roles,'1  音の役割')
         balance=QWidget();bl=QVBoxLayout(balance);form=QFormLayout();self.factors={}
         for role,title in ROLES.items():
-            field=QSpinBox();field.setRange(0,100);field.setValue(100);field.setSuffix(' %');self.factors[role]=field;form.addRow(title,field)
+            field=QSpinBox();field.setRange(0,500);field.setValue(100);field.setSuffix(' %');self.factors[role]=field;form.addRow(title,field)
         bl.addLayout(form)
         preset=QPushButton('声を中心にする：声100 / ゲーム40 / 効果音75 / BGM20')
         preset.clicked.connect(lambda:[self.factors[k].setValue(v) for k,v in {'voice':100,'desktop':40,'sfx':75,'bgm':20}.items()]);bl.addWidget(preset)
-        bl.addWidget(note('現在開いている編集版と、その中の複合クリップに適用します。同じ素材を使う別の編集版の音量は変わりません。役割の指定は素材に保存します。'))
+        bl.addWidget(note('割合は現在の音量に掛かります。100%で維持、200%で2倍、500%で5倍です。大きく上げると音が割れやすくなります。現在の編集版と複合クリップに適用します。'))
         bl.addStretch();tabs.addTab(balance,'2  全体の音量')
         bgm=QWidget();bgl=QVBoxLayout(bgm);bgl.addWidget(note('複数のMP3を候補に追加し、この編集版に使う1曲を選べます。選んだBGMは先頭から専用トラックへ配置します。曲が短い場合は曲の終端までです。'))
         self.bgm=QComboBox();self.bgm.addItem('現在のBGMを維持','keep');self.bgm.addItem('この編集版のBGM配置を外す',None)

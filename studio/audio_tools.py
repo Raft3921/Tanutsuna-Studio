@@ -124,9 +124,9 @@ def apply_mix(library, sequence, assignments, factors, bgm='keep'):
             asset=library.assets[clip.asset_id]
             if asset.kind!='media' or not asset.has_audio:continue
             factor=factors.get(audio_role(asset),1)
-            if not 0<=factor<=1:raise ValueError('音量の割合は0〜100%で指定してください。')
-            clip.volume*=factor
-            clip.volume_keys={frame:gain*factor for frame,gain in clip.volume_keys.items()}
+            if not 0<=factor<=5:raise ValueError('音量の割合は0〜500%で指定してください。')
+            clip.volume=min(5,clip.volume*factor)
+            clip.volume_keys={frame:min(5,gain*factor) for frame,gain in clip.volume_keys.items()}
     if bgm=='keep':return
     # BGM replacement affects this timeline; nested compositions remain independent.
     sequence.clips=[c for c in sequence.clips if audio_role(library.assets[c.asset_id])!='bgm']

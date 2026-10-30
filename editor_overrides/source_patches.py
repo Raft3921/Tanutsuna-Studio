@@ -6,6 +6,10 @@ PATCHES = {
     'model.py': [
         ('    video_tracks: int = 2\n    audio_tracks: int = 2',
          '    video_tracks: int = 1\n    audio_tracks: int = 1'),
+        ('            if not 0 <= clip.volume <= 1:\n                raise ValueError("音量は 0〜100% で指定してください。")',
+         '            if not 0 <= clip.volume <= 5:\n                raise ValueError("音量は 0〜500% で指定してください。")'),
+        ('or not 0 <= value <= 1):\n                    raise ValueError("音量キーフレームの範囲が不正です。")',
+         'or not 0 <= value <= 5):\n                    raise ValueError("音量キーフレームは0〜500%の範囲で指定してください。")'),
         ('            if clip.track >= 0 and not assets[clip.asset_id].has_video:',
          '            if clip.track > 0 and not assets[clip.asset_id].has_video:'),
         ('        video = any(c.track >= 0 for c in chosen)\n        track = max(c.track for c in chosen) if video else min(c.track for c in chosen)',
@@ -32,6 +36,9 @@ PATCHES = {
         ('source+2/self.scale', 'source+4/self.scale'),
     ],
     'app.py': [
+        ('        self.volume_field.setRange(0, 100)', '        self.volume_field.setRange(0, 500)'),
+        ('        self.volume_slider.setRange(0, 100)', '        self.volume_slider.setRange(0, 500)'),
+        ('            self.preview.audio.setVolume(value / 100)', '            self.preview.audio.setVolume(min(1.0, value / 100))'),
         ("            self.destination_track.addItem(f'映像 V{track + 1}', track)",
          "            self.destination_track.addItem('メイン' if track == 0 else f'上レイヤー {track + 1}', track)"),
         ("            self.destination_track.addItem(f'音声 A{track}', -track)",
