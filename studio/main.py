@@ -10,6 +10,7 @@ from .desk import ProductionDesk
 from .theme import apply_theme
 from .jobs import Jobs
 from .version import STUDIO_VERSION
+from .updater import UpdateWorker
 
 
 class StudioWindow(QMainWindow):
@@ -338,7 +339,7 @@ class StudioWindow(QMainWindow):
         self.desk.update_install_button.setEnabled(False)
         labels={'check':'GitHubで最新版を確認しています…','download':'更新ファイルを取得・検証しています…','install':'アプリを安全に入れ替える準備をしています…'}
         self.desk.update_status.setText(labels[action])
-        worker=__import__('studio.updater',fromlist=['UpdateWorker']).UpdateWorker(action,release,package)
+        worker=UpdateWorker(action,release,package)
         worker.completed.connect(lambda result,a=action:self._update_finished(a,result))
         self.update_worker=worker;worker.start()
 
