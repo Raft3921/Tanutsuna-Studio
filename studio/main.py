@@ -215,17 +215,28 @@ class StudioWindow(QMainWindow):
         from cutraft.model import Clip,uid
         def apply():
             cursor=editor.sequence.end
+            insertion_start=cursor
+            placed=0
+            seen=set()
             for asset in editor.library.assets.values():
                 if asset.path not in paths:continue
                 if context.get('audio_role') and asset.has_audio:asset.payload['studio_audio_role']=context['audio_role']
-                if not context.get('place',True) or any(c.asset_id==asset.id for c in editor.sequence.clips):continue
+                if not context.get('place',True) or asset.id in seen:continue
+                seen.add(asset.id)
                 duration=max(1,round(asset.duration_ms*editor.sequence.rate/1000)) if asset.kind=='image' else asset.frames(editor.sequence.rate)
                 editor.sequence.clips.append(Clip(uid(),asset.id,cursor,0,duration,track=0 if asset.has_video else -1))
                 cursor+=duration
+                placed+=1
+            self._last_import_placement=(placed,insertion_start)
         editor.finish_import_segment()
         editor.commit('BGM候補を保存' if not context.get('place',True) else '素材をそのまま配置',apply)
-        editor.save(False);editor.fit_timeline()
-        self.desk.status.setText('BGM候補を保存しました。「音量・BGM」を開いて曲を選べます。' if not context.get('place',True) else '素材を動画内に保存し、タイムラインへ配置しました。')
+        editor.save(False)
+        if context.get('place',True):
+            placed,start=getattr(self,'_last_import_placement',(0,0))
+            if placed:
+                editor.seek_timeline(start)
+                editor.reveal_timeline_frame(start)
+        self.desk.status.setText('BGM候補を保存しました。「音量・BGM」を開いて曲を選べます。' if not context.get('place',True) else f'素材を動画内に保存し、{getattr(self,"_last_import_placement",(0,))[0]}件をタイムライン末尾へ追加しました。')
         self.refresh_save_state()
 
     def consolidate_media(self):

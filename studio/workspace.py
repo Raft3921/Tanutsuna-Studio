@@ -96,7 +96,7 @@ class Workspace:
             (folder / name).mkdir(parents=True, exist_ok=True)
         library = Library()
         library.active.name = title
-        library.active.video_tracks, library.active.audio_tracks = 1, 1
+        library.active.video_tracks, library.active.audio_tracks = 2, 2
         library.active.width, library.active.height = 1920, 1080
         library.active.fps_num, library.active.fps_den = 50, 1
         save_library(library, str(folder / FOLDERS['edit'] / 'main.cutraft'))
@@ -122,7 +122,7 @@ class Workspace:
         library=Library();library.active.name=project['title']
         library.active.width,library.active.height=1920,1080
         library.active.fps_num,library.active.fps_den=50,1
-        library.active.video_tracks=library.active.audio_tracks=1
+        library.active.video_tracks=library.active.audio_tracks=2
         path.parent.mkdir(parents=True,exist_ok=True)
         save_library(library,str(path))
         return path
