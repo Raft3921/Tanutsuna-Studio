@@ -63,6 +63,8 @@ class TrackingState:
         self.last_seen = 0
         self.message = '未接続'
         self.camera_label = ''
+        self.microphone_label = ''
+        self.voice_gain = 2.5
         self.detected = False
         self.generation = 0
 
@@ -78,6 +80,10 @@ class TrackingState:
             self.message = str(data.get('status', '追跡中' if self.detected else '顔を探しています'))[:160]
             label=data.get('cameraLabel','')
             if isinstance(label,str) and label:self.camera_label=label[:200]
+            microphone=data.get('microphoneLabel','')
+            if isinstance(microphone,str) and microphone:self.microphone_label=microphone[:200]
+            voice_gain=data.get('voiceGain',self.voice_gain)
+            if type(voice_gain) in (int,float) and math.isfinite(voice_gain):self.voice_gain=min(5,max(.5,float(voice_gain)))
             self.generation += 1
 
     def snapshot(self):

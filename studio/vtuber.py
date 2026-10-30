@@ -28,6 +28,8 @@ class VtuberPanel(QWidget):
         super().__init__(parent)
         self.project_getter=project_getter
         self.server=TrackerServer()
+        try:self.server.state.voice_gain=min(5,max(.5,float(QSettings('TanutsunaStudio','Avatar').value('voiceMouthGain',2.5))))
+        except (TypeError,ValueError):pass
         self.mouth_shapes=dict(DEFAULT_SHAPES)
         try:
             stored=json.loads(QSettings('TanutsunaStudio','Avatar').value('mouthShapes','{}'))
@@ -37,7 +39,7 @@ class VtuberPanel(QWidget):
                     self.mouth_shapes[vowel]=(max(.55,min(1.9,width)),max(.15,min(1.3,height)))
         except (ValueError,TypeError):pass
         self.pose=Pose();self.neutral=[0,0,0];self.last=time.monotonic();self.epoch=self.last
-        self._last_camera_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.camera_window=None
+        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.camera_window=None
         self.setMinimumHeight(420)
         outer=QVBoxLayout(self)
         controls=QHBoxLayout()
@@ -74,7 +76,7 @@ class VtuberPanel(QWidget):
         self.stroke.valueChanged.connect(self.save_mouth_shape)
         self.load_mouth_shape()
         restore=QPushButton('口形を標準に戻す');restore.clicked.connect(self.reset_mouth_shapes);form.addRow(restore)
-        note=QLabel('手動モードで各口形を確認。カメラでは唇の形から推定し、滑らかに切り替えます。設定は自動保存されます。')
+        note=QLabel('カメラ追跡では唇の形に加え、マイク音量から普通の会話中の小さな口の動きも補います。音声はこのPC内だけで解析します。')
         note.setWordWrap(True);form.addRow(note)
         right.addWidget(group)
         group=QGroupBox('カメラ追跡の動き');form=QFormLayout(group)
@@ -136,7 +138,7 @@ class VtuberPanel(QWidget):
         try:
             assets=Path(__file__).parent/'assets/tracker'
             if not (assets/'face_landmarker.task').is_file():raise ValueError('追跡モデルがありません。配布ZIPをすべて展開してください。')
-            self.server.state.camera_label='';self._last_camera_label=''
+            self.server.state.camera_label='';self.server.state.microphone_label='';self._last_camera_label='';self._last_microphone_label=''
             url=self.server.start()
             self.mode.setCurrentIndex(2)
             self.neutral=[0,0,0]
@@ -192,6 +194,15 @@ class VtuberPanel(QWidget):
             self._last_camera_label=label
             from .camera_choice import CameraChoice
             CameraChoice.remember(label)
+        microphone_label=self.server.state.microphone_label
+        if microphone_label and microphone_label!=self._last_microphone_label:
+            self._last_microphone_label=microphone_label
+            QSettings('TanutsunaStudio','Avatar').setValue('microphoneLabel',microphone_label)
+        voice_gain=self.server.state.voice_gain
+        try:stored_voice_gain=float(QSettings('TanutsunaStudio','Avatar').value('voiceMouthGain',2.5))
+        except (TypeError,ValueError):stored_voice_gain=2.5
+        if abs(stored_voice_gain-voice_gain)>.04:
+            QSettings('TanutsunaStudio','Avatar').setValue('voiceMouthGain',voice_gain)
         now=time.monotonic();dt=now-self.last;self.last=now;t=now-self.epoch
         if not self.isVisible() and not (self.output and self.output.isVisible()) and self.server.server is None and self.recording is None and not getattr(self,'synced_recording',False):return
         mode=self.mode.currentIndex();detected=False

@@ -1,7 +1,41 @@
 import {FaceLandmarker, FilesetResolver} from '/tracker/vision_bundle.mjs';
 const $=id=>document.getElementById(id), token=new URLSearchParams(location.hash.slice(1)).get('token');
 let preferredLabel=new URLSearchParams(location.hash.slice(1)).get('camera')||'';
-let detector, stream, running=false, generation=0, baseline=null, busy=false, lastVideo=-1;
+let preferredMicrophone=new URLSearchParams(location.hash.slice(1)).get('microphone')||'';
+let detector, stream, audioContext, audioAnalyser, audioSamples, running=false, audioReady=false, audioNoise=.002, audioMouth=0;
+let generation=0, baseline=null, busy=false, lastVideo=-1;
+const sensitivity=$('speech-sensitivity'),queryGain=Number(new URLSearchParams(location.hash.slice(1)).get('voiceGain'));
+if(sensitivity){const saved=localStorage.getItem('speech-sensitivity');if(Number.isFinite(queryGain)&&queryGain>0)sensitivity.value=String(Math.max(.5,Math.min(5,queryGain)));else if(saved)sensitivity.value=saved;}
+function showSensitivity(){ $('speech-sensitivity-value').value=Number(sensitivity.value).toFixed(1);localStorage.setItem('speech-sensitivity',sensitivity.value); }
+sensitivity?.addEventListener('input',showSensitivity);showSensitivity();
+function speechMouth(){
+  if(!audioAnalyser)return 0;
+  audioAnalyser.getFloatTimeDomainData(audioSamples);
+  let sum=0;for(const sample of audioSamples)sum+=sample*sample;
+  const rms=Math.sqrt(sum/audioSamples.length);
+  if(rms<audioNoise*1.6)audioNoise+=(rms-audioNoise)*(rms<audioNoise ? .04 : .006);
+  const gate=Math.max(.0008,audioNoise*1.35), ceiling=Math.max(.012,gate*6);
+  const activity=Math.max(0,Math.min(1,(rms-gate)/(ceiling-gate)));
+  const target=Math.min(.82,Math.sqrt(activity)*.28*Number(sensitivity.value));
+  audioMouth+=(target>audioMouth ? .58 : .24)*(target-audioMouth);
+  return audioMouth;
+}
+async function startAudio(stream){
+  const track=stream.getAudioTracks()[0];if(!track)return false;
+  audioContext=new AudioContext({latencyHint:'interactive'});
+  await audioContext.resume();
+  const source=audioContext.createMediaStreamSource(new MediaStream([track]));
+  const highpass=audioContext.createBiquadFilter();highpass.type='highpass';highpass.frequency.value=110;
+  const lowpass=audioContext.createBiquadFilter();lowpass.type='lowpass';lowpass.frequency.value=3600;
+  audioAnalyser=audioContext.createAnalyser();audioAnalyser.fftSize=512;audioAnalyser.smoothingTimeConstant=.15;
+  source.connect(highpass);highpass.connect(lowpass);lowpass.connect(audioAnalyser);
+  audioSamples=new Float32Array(audioAnalyser.fftSize);audioNoise=.002;audioMouth=0;audioReady=true;
+  return true;
+}
+async function stopAudio(){
+  audioReady=false;audioAnalyser=null;audioSamples=null;audioMouth=0;
+  if(audioContext){const context=audioContext;audioContext=null;try{await context.close();}catch{}}
+}
 function poseFromResult(result) {
   const c=Object.fromEntries((result.faceBlendshapes?.[0]?.categories||[]).map(x=>[x.categoryName,x.score]));
   const m=result.facialTransformationMatrixes?.[0]?.data;
@@ -12,11 +46,12 @@ function poseFromResult(result) {
   const yaw=Math.atan2(-m[2]/length,Math.hypot(m[6],m[10])/length)*180/Math.PI;
   const roll=Math.atan2(m[1],m[0])*180/Math.PI;
   if(!baseline) baseline={yaw,pitch,roll,x:m[12],y:m[13],z:m[14]};
+  const visualJaw=c.jawOpen||0, voiceJaw=speechMouth(), jawOpen=Math.max(visualJaw,voiceJaw);
   return {yaw:yaw-baseline.yaw,pitch:pitch-baseline.pitch,roll:roll-baseline.roll,
     headX:(m[12]-baseline.x)*.045,headY:(m[13]-baseline.y)*.045,headZ:(m[14]-baseline.z)*.035,
-    jawOpen:c.jawOpen||0,browUp:c.browInnerUp||0,
+    jawOpen,browUp:c.browInnerUp||0,
     // Visual vowel estimates from lip shape; no speech recognition or audio upload.
-    mouthA:Math.max(0,(c.jawOpen||0)-(c.mouthFunnel||0)-(c.mouthPucker||0)),
+    mouthA:Math.max(0,visualJaw-(c.mouthFunnel||0)-(c.mouthPucker||0),voiceJaw),
     mouthI:Math.max(c.mouthStretchLeft||0,c.mouthStretchRight||0)*(1-(c.jawOpen||0)),
     mouthU:c.mouthPucker||0,
     mouthE:Math.max(c.mouthSmileLeft||0,c.mouthSmileRight||0)*(c.jawOpen||0),
@@ -24,12 +59,13 @@ function poseFromResult(result) {
 }
 async function send(detected,pose={},status='') {
   const response=await fetch('/pose',{method:'POST',headers:{'Content-Type':'application/json','X-Tracking-Token':token},
-    body:JSON.stringify({detected,pose,status,cameraLabel:running?($('camera-device').selectedOptions[0]?.textContent||''):''}),keepalive:true});
+    body:JSON.stringify({detected,pose,status,cameraLabel:running?($('camera-device').selectedOptions[0]?.textContent||''):'',microphoneLabel:audioReady?($('microphone-device').selectedOptions[0]?.textContent||''):'',voiceGain:Number(sensitivity.value)}),keepalive:true});
   if(!response.ok) throw new Error('制作デスクとの接続が切れました。制作デスクからカメラ画面を開き直してください。');
 }
 async function stop(message='カメラを停止しました。') {
   running=false;generation++;
   if(stream) stream.getTracks().forEach(t=>t.stop());
+  await stopAudio();
   stream=null;$('camera').srcObject=null;
   $('start').disabled=false;$('stop').disabled=true;$('calibrate').disabled=true;
   $('status').textContent=message;
@@ -42,7 +78,7 @@ async function tick(version) {
     try{
       const result=detector.detectForVideo($('camera'),performance.now());
       const pose=poseFromResult(result), detected=!!pose;
-      $('status').textContent=detected?'追跡中。正面を向いて「正面を基準にする」を押すと中心を合わせられます。':'顔を探しています。明るさとカメラの向きを確認してください。';
+      $('status').textContent=detected?`追跡中${audioReady?'・声の動きを反映中':'・顔の動きのみ'}。正面を向いて「正面を基準にする」を押すと中心を合わせられます。`:'顔を探しています。明るさとカメラの向きを確認してください。';
       await send(detected,pose||{},detected?'カメラ追跡中':'顔を探しています');
     }catch(error){await stop(error.message||String(error));return;}finally{busy=false;}
   }
@@ -50,14 +86,22 @@ async function tick(version) {
 }
 function cameraKey(label){return label.toLowerCase().replaceAll('カメラ','camera').replaceAll('の','').replace(/\(built.in\)|（内蔵）|[\s\p{P}\p{Cf}]/gu,'');}
 async function cameraList(){
-  const previous=$('camera-device').value;
-  const devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+  const previous=$('camera-device').value,previousMic=$('microphone-device').value;
+  const all=await navigator.mediaDevices.enumerateDevices();
+  const devices=all.filter(d=>d.kind==='videoinput'),microphones=all.filter(d=>d.kind==='audioinput');
   $('camera-device').replaceChildren(new Option('標準のカメラ',''));
   for(const [index,device] of devices.entries())$('camera-device').add(new Option(device.label||`カメラ ${index+1}`,device.deviceId));
+  $('microphone-device').replaceChildren(new Option('標準のマイク',''));
+  for(const [index,device] of microphones.entries())$('microphone-device').add(new Option(device.label||`マイク ${index+1}`,device.deviceId));
   if(previous && devices.some(d=>d.deviceId===previous))$('camera-device').value=previous;
   else if(preferredLabel){
     const desired=cameraKey(preferredLabel),match=devices.find(d=>cameraKey(d.label)===desired)||devices.find(d=>desired.length>5&&cameraKey(d.label).length>5&&(cameraKey(d.label).includes(desired)||desired.includes(cameraKey(d.label))));
     if(match)$('camera-device').value=match.deviceId;
+  }
+  if(previousMic&&microphones.some(d=>d.deviceId===previousMic))$('microphone-device').value=previousMic;
+  else if(preferredMicrophone){
+    const desired=cameraKey(preferredMicrophone),match=microphones.find(d=>cameraKey(d.label)===desired)||microphones.find(d=>desired.length>5&&cameraKey(d.label).length>5&&(cameraKey(d.label).includes(desired)||desired.includes(cameraKey(d.label))));
+    if(match)$('microphone-device').value=match.deviceId;
   }
   return devices;
 }
@@ -65,6 +109,10 @@ $('refresh-cameras').onclick=()=>cameraList().catch(()=>{$('status').textContent
 $('camera-device').onchange=async()=>{
   preferredLabel=$('camera-device').value?$('camera-device').selectedOptions[0].textContent:'';
   if(running){await stop('カメラを切り替えています…');$('start').click();}
+};
+$('microphone-device').onchange=async()=>{
+  preferredMicrophone=$('microphone-device').value?$('microphone-device').selectedOptions[0].textContent:'';
+  if(running){await stop('マイクを切り替えています…');$('start').click();}
 };
 navigator.mediaDevices.addEventListener('devicechange',()=>cameraList().catch(()=>{}));
 cameraList().catch(()=>{});
@@ -88,14 +136,25 @@ $('start').onclick=async()=>{
       devices=await cameraList();
     }
     if(preferredLabel && !$('camera-device').value)throw new Error('選択したカメラが見つかりません。接続を確認するかカメラ一覧で選び直してください。');
-    const selected=$('camera-device').value;
-    const candidate=await navigator.mediaDevices.getUserMedia({video:{...(selected?{deviceId:{exact:selected}}:{}),width:{ideal:480},height:{ideal:360},frameRate:{ideal:30,max:30}},audio:false});
+    const selected=$('camera-device').value,selectedMicrophone=$('microphone-device').value;
+    const video={...(selected?{deviceId:{exact:selected}}:{}),width:{ideal:480},height:{ideal:360},frameRate:{ideal:30,max:30}};
+    let candidate;
+    try{
+      candidate=await navigator.mediaDevices.getUserMedia({video,audio:{...(selectedMicrophone?{deviceId:{exact:selectedMicrophone}}:{}),channelCount:1,echoCancellation:false,noiseSuppression:true,autoGainControl:true}});
+      if(generation!==version){candidate.getTracks().forEach(t=>t.stop());return;}
+      try{await startAudio(candidate);}catch{candidate.getAudioTracks().forEach(t=>t.stop());await stopAudio();}
+    }catch(audioError){
+      if(generation!==version)return;
+      candidate=await navigator.mediaDevices.getUserMedia({video,audio:false});audioReady=false;
+    }
     if(generation!==version){candidate.getTracks().forEach(t=>t.stop());return;}
     stream=candidate;
     $('camera').srcObject=stream;await $('camera').play();
     await cameraList();
     const actual=stream.getVideoTracks()[0].getSettings().deviceId;
     if(actual)$('camera-device').value=actual;
+    const actualMic=stream.getAudioTracks()[0]?.getSettings().deviceId;
+    if(actualMic)$('microphone-device').value=actualMic;
     baseline=null;lastVideo=-1;running=true;
     $('stop').disabled=false;$('calibrate').disabled=false;
     tick(version);

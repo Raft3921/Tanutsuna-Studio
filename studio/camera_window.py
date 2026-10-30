@@ -25,15 +25,22 @@ class CameraWindow(QDialog):
 
     def permission(self,request):
         origin=request.origin().toString().rstrip('/')
-        if origin==self.origin and request.permissionType()==QWebEnginePermission.PermissionType.MediaVideoCapture:
+        if origin==self.origin and request.permissionType() in (
+                QWebEnginePermission.PermissionType.MediaVideoCapture,
+                QWebEnginePermission.PermissionType.MediaAudioCapture):
             request.grant()
         else:request.deny()
 
     def open_tracker(self,url,automatic=False):
         from PySide6.QtCore import QSettings
         from urllib.parse import quote
-        label=QSettings('TanutsunaStudio','Avatar').value('cameraLabel','')
+        settings=QSettings('TanutsunaStudio','Avatar')
+        label=settings.value('cameraLabel','')
+        microphone=settings.value('microphoneLabel','')
+        voice_gain=settings.value('voiceMouthGain',2.5)
         if label:url+='&camera='+quote(label,safe='')
+        if microphone:url+='&microphone='+quote(microphone,safe='')
+        url+='&voiceGain='+quote(str(voice_gain),safe='')
         self.origin=url.split('/#')[0]
         if automatic:url+='&autostart=1'
         current=self.view.url().toString()
