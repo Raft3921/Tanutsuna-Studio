@@ -53,6 +53,9 @@ def prepare():
     if copied.exists():
         shutil.rmtree(copied)
     shutil.copytree(SOURCE / 'cutraft', copied, ignore=ignore)
+    sys.path.insert(0, str(ROOT))
+    from editor_overrides.source_patches import apply_source_patches
+    apply_source_patches(copied)
     # Isolate this app's preferences and default folders from the original Cut Raft.
     for name in ['app.py', 'workspace.py']:
         file = copied / name

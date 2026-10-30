@@ -70,7 +70,8 @@ class EditorSurface(MainWindow):
         self.addToolBar(toolbar)
         for action in (self.undo_action,self.redo_action,self.split_action,self.delete_action):toolbar.addAction(action)
         toolbar.addSeparator()
-        toolbar.addAction('字幕を追加',self.new_title)
+        toolbar.addAction('字幕ライブラリ',self.open_subtitles)
+        toolbar.addAction('テロップ作成',self.new_title)
         toolbar.addAction('素材を追加',self.import_assets)
         toolbar.addSeparator()
         automation=self.menuBar().addMenu('自動編集')
@@ -78,6 +79,10 @@ class EditorSurface(MainWindow):
             automation.addAction(title,method);toolbar.addAction(title,method)
         toolbar.addSeparator();toolbar.addAction(self.mp4_export_action)
         self.export_button.hide()
+
+    def open_subtitles(self):
+        from .subtitle_library import SubtitleLibrary
+        SubtitleLibrary(self).exec()
 
     def open_silence(self):
         if self.shell.desk.busy:self.statusBar().showMessage('収録や素材の処理を完了してから実行してください。');return

@@ -352,9 +352,9 @@ class Preview(QWidget):
             p = QPainter(output)
             p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             for clip in sequence.active_clips(frame):
-                if clip.track < 0:
-                    continue
                 asset = self.library.assets[clip.asset_id]
+                if not asset.has_video:
+                    continue
                 if asset.kind == 'compound':
                     child = next(s for s in self.library.sequences if s.id == asset.payload['sequence_id'])
                     image = draw_sequence(child, round((clip.source_in+frame-clip.start)*child.rate/sequence.rate), (*prefix, clip.id))
