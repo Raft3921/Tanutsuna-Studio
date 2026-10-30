@@ -27,7 +27,8 @@ class CameraWindow(QDialog):
         origin=request.origin().toString().rstrip('/')
         if origin==self.origin and request.permissionType() in (
                 QWebEnginePermission.PermissionType.MediaVideoCapture,
-                QWebEnginePermission.PermissionType.MediaAudioCapture):
+                QWebEnginePermission.PermissionType.MediaAudioCapture,
+                QWebEnginePermission.PermissionType.MediaAudioVideoCapture):
             request.grant()
         else:request.deny()
 

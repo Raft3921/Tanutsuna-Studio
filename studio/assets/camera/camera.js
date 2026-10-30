@@ -85,6 +85,17 @@ async function tick(version) {
   setTimeout(()=>tick(version),50);
 }
 function cameraKey(label){return label.toLowerCase().replaceAll('カメラ','camera').replaceAll('の','').replace(/\(built.in\)|（内蔵）|[\s\p{P}\p{Cf}]/gu,'');}
+function describeCameraError(error){
+  const name=error?.name||'Error',message=error?.message||String(error);
+  if(name==='NotAllowedError'){
+    const mac=navigator.userAgent.toLowerCase().includes('mac');
+    const help=mac?'macOS「システム設定 ＞ プライバシーとセキュリティ ＞ カメラ」で「たぬつな Studio」を許可してください。':'OSのプライバシー設定で、このアプリのカメラ利用を許可してください。';
+    return `カメラへのアクセスが拒否されました。${help} 詳細: ${message}`;
+  }
+  if(name==='NotFoundError')return 'カメラが見つかりません。接続と選択中のカメラを確認してください。詳細: '+message;
+  if(name==='NotReadableError')return 'カメラを他のアプリが使用中か、起動できません。FaceTimeやZoomなどを終了して再試行してください。詳細: '+message;
+  return `${name}: ${message}`;
+}
 async function cameraList(){
   const previous=$('camera-device').value,previousMic=$('microphone-device').value;
   const all=await navigator.mediaDevices.enumerateDevices();
@@ -145,7 +156,8 @@ $('start').onclick=async()=>{
       try{await startAudio(candidate);}catch{candidate.getAudioTracks().forEach(t=>t.stop());await stopAudio();}
     }catch(audioError){
       if(generation!==version)return;
-      candidate=await navigator.mediaDevices.getUserMedia({video,audio:false});audioReady=false;
+      try{candidate=await navigator.mediaDevices.getUserMedia({video,audio:false});audioReady=false;}
+      catch(cameraFailure){throw new Error(`カメラを開けませんでした（${describeCameraError(cameraFailure)}）。マイク付き取得時の詳細: ${audioError?.name||'Error'}: ${audioError?.message||String(audioError)}`);}
     }
     if(generation!==version){candidate.getTracks().forEach(t=>t.stop());return;}
     stream=candidate;
@@ -158,7 +170,7 @@ $('start').onclick=async()=>{
     baseline=null;lastVideo=-1;running=true;
     $('stop').disabled=false;$('calibrate').disabled=false;
     tick(version);
-  }catch(error){if(generation===version)await stop('開始できません：'+(error.message||String(error)));}
+  }catch(error){if(generation===version)await stop('開始できません：'+describeCameraError(error));}
 };
 $('stop').onclick=()=>stop();
 $('calibrate').onclick=()=>{baseline=null;$('status').textContent='次に検出する正面の顔を基準にします。';};

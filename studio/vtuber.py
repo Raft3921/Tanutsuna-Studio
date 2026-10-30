@@ -4,9 +4,9 @@ import math
 import shutil
 import time
 from datetime import datetime
-from PySide6.QtCore import Qt, QTimer, QUrl, QSettings
+from PySide6.QtCore import Qt, QTimer, QUrl, QSettings, QCameraPermission
 from PySide6.QtGui import QColor, QDesktopServices
-from PySide6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QGroupBox,
+from PySide6.QtWidgets import (QApplication,QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QGroupBox,
     QLabel,QPushButton,QComboBox,QSlider,QCheckBox,QFileDialog,QMessageBox,QSplitter,QDoubleSpinBox,QScrollArea)
 from .avatar_view import AvatarViewport
 from .tracking import Pose, TrackerServer, smooth_pose
@@ -39,7 +39,7 @@ class VtuberPanel(QWidget):
                     self.mouth_shapes[vowel]=(max(.55,min(1.9,width)),max(.15,min(1.3,height)))
         except (ValueError,TypeError):pass
         self.pose=Pose();self.neutral=[0,0,0];self.last=time.monotonic();self.epoch=self.last
-        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.camera_window=None
+        self._last_camera_label='';self._last_microphone_label='';self._camera_permission_pending=False;self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.camera_window=None
         self.setMinimumHeight(420)
         outer=QVBoxLayout(self)
         controls=QHBoxLayout()
@@ -136,6 +136,19 @@ class VtuberPanel(QWidget):
 
     def start_tracking(self,checked=False,automatic=False):
         try:
+            app=QApplication.instance();permission=QCameraPermission();permission_status=app.checkPermission(permission)
+            if permission_status==Qt.PermissionStatus.Undetermined:
+                if not self._camera_permission_pending:
+                    self._camera_permission_pending=True
+                    self.status.setText('OSのカメラ許可を確認しています…')
+                    app.requestPermission(permission,self,lambda _result:self._camera_permission_finished(automatic))
+                return True
+            if permission_status==Qt.PermissionStatus.Denied:
+                message='開始できません：OSのカメラ許可がありません。システム設定 ＞ プライバシーとセキュリティ ＞ カメラで「たぬつな Studio」を許可し、アプリを再起動してください。'
+                self.server.state.update({'detected':False,'pose':{},'status':message})
+                self.status.setText(message)
+                if not automatic:QMessageBox.warning(self,'カメラの許可が必要です',message.removeprefix('開始できません：'))
+                return False
             assets=Path(__file__).parent/'assets/tracker'
             if not (assets/'face_landmarker.task').is_file():raise ValueError('追跡モデルがありません。配布ZIPをすべて展開してください。')
             self.server.state.camera_label='';self.server.state.microphone_label='';self._last_camera_label='';self._last_microphone_label=''
@@ -153,6 +166,10 @@ class VtuberPanel(QWidget):
         except Exception as exc:
             if automatic:raise
             QMessageBox.warning(self,'追跡を開始できません',str(exc));return False
+
+    def _camera_permission_finished(self,automatic):
+        self._camera_permission_pending=False
+        self.start_tracking(automatic=automatic)
 
     def change_camera(self,label):
         if self.server.server is None:return
