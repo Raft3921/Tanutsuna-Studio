@@ -15,7 +15,7 @@ def render_avatar(folder):
     from .avatar_model import AvatarModel
     from .tracking import Pose
     from .avatar_gl import configure_opengl
-    from .avatar_offline import OfflineAvatar,downsample,AVATAR_SIZE,AVATAR_FILE
+    from .avatar_offline import OfflineAvatar,AVATAR_SIZE,AVATAR_FILE
     from cutraft.media_cache import ffmpeg_executable, process_options
     from .jobs import lower_priority
     import subprocess
@@ -37,10 +37,10 @@ def render_avatar(folder):
     model=AvatarModel();renderer=None;widget=None
     try:
         renderer=OfflineAvatar(model)
-        print('透過GPU描画: 2160px → 1080px、4x MSAA',flush=True)
+        print('透過GPU描画: 1080px、4x MSAA（拡大縮小なし）',flush=True)
     except Exception as exc:
         print('互換描画: '+str(exc),flush=True)
-        widget=SoftwareViewport(model);widget.resize(AVATAR_SIZE*2,AVATAR_SIZE*2)
+        widget=SoftwareViewport(model);widget.resize(AVATAR_SIZE,AVATAR_SIZE)
         widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground,True)
         widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground,True)
         widget.setAutoFillBackground(False)
@@ -49,7 +49,7 @@ def render_avatar(folder):
     temporary = folder / 'vtuber.partial.mov'
     command = [ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
         '-threads', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', f'{AVATAR_SIZE}x{AVATAR_SIZE}', '-r', str(fps), '-i', 'pipe:0',
-        '-an', '-c:v', 'png', '-compression_level', '3', '-pred', 'mixed', '-pix_fmt', 'rgba', '-threads', '1',
+        '-an', '-c:v', 'png', '-compression_level', '1', '-pred', 'mixed', '-pix_fmt', 'rgba', '-threads', '2',
         '-movflags', '+faststart', str(temporary)]
     process = subprocess.Popen(command, stdin=subprocess.PIPE, **process_options())
     try:
@@ -65,9 +65,9 @@ def render_avatar(folder):
             if renderer:image=renderer.frame(Pose(**pose),now,header.get('orbit',0))
             else:
                 widget.pose,widget.now,widget.orbit=Pose(**pose),now,header.get('orbit',0)
-                image=QImage(AVATAR_SIZE*2,AVATAR_SIZE*2,QImage.Format.Format_ARGB32_Premultiplied)
+                image=QImage(AVATAR_SIZE,AVATAR_SIZE,QImage.Format.Format_ARGB32_Premultiplied)
                 image.fill(Qt.GlobalColor.transparent);widget.render(image)
-                image=downsample(image,AVATAR_SIZE)
+                image=image.convertToFormat(QImage.Format.Format_RGBA8888)
             process.stdin.write(image.constBits().tobytes())
             if frame % fps == 0: print(f'{frame/fps:.1f}/{duration:.1f}', flush=True)
         process.stdin.close()

@@ -6,7 +6,7 @@ from .avatar_gl import GLViewport,surface_format
 
 AVATAR_SIZE=1080
 AVATAR_FILE='vtuber.mov'
-AVATAR_VERSION=4
+AVATAR_VERSION=5
 
 
 class _OfflineViewport(GLViewport):
@@ -21,7 +21,7 @@ class _OfflineViewport(GLViewport):
 
 
 class OfflineAvatar:
-    def __init__(self,model,size=AVATAR_SIZE,samples=2):
+    def __init__(self,model,size=AVATAR_SIZE,samples=1):
         self.size=size;self.render_size=size*samples
         self.surface=QOffscreenSurface();self.surface.setFormat(surface_format());self.surface.create()
         self.context=QOpenGLContext();self.context.setFormat(surface_format())
@@ -54,6 +54,7 @@ class OfflineAvatar:
 
 def downsample(image,size):
     # Filtering premultiplied color prevents a dark/green fringe at partial alpha.
-    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied).scaled(
-        size,size,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation
-        ).convertToFormat(QImage.Format.Format_RGBA8888)
+    image=image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    if image.width()!=size or image.height()!=size:
+        image=image.scaled(size,size,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation)
+    return image.convertToFormat(QImage.Format.Format_RGBA8888)
