@@ -89,14 +89,20 @@ class EditorSurface(MainWindow):
 
     def open_silence(self):
         if self.shell.desk.busy:self.statusBar().showMessage('収録や素材の処理を完了してから実行してください。');return
-        from .audio_dialogs import SilenceDialog
-        SilenceDialog(self).exec()
+        try:
+            from .audio_dialogs import SilenceDialog
+            SilenceDialog(self).exec()
+        except Exception as exc:
+            QMessageBox.critical(self,'無音カットを開けません',f'無音カット画面の準備に失敗しました。\n{exc}')
 
     def open_transcription(self):
         if self.shell.desk.busy:
             self.statusBar().showMessage('収録や素材の処理を完了してから実行してください。');return
-        from .transcription_dialog import TranscriptionDialog
-        TranscriptionDialog(self).exec()
+        try:
+            from .transcription_dialog import TranscriptionDialog
+            TranscriptionDialog(self).exec()
+        except Exception as exc:
+            QMessageBox.critical(self,'自動文字起こしを開けません',f'画面の準備に失敗しました。Studioを再起動しても続く場合は、次の内容をお知らせください。\n{exc}')
 
     def replace_caption_style(self):
         clips=[clip for clip in self.selected_clips()

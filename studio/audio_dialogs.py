@@ -26,17 +26,21 @@ class SilenceDialog(QDialog):
         self.preset.addItem('ゆったり（短い間は残す）',(-45,1.0,.20))
         self.preset.addItem('テンポ重視（間を多めにカット）',(-32,.45,.08))
         form.addRow('カットの強さ',self.preset)
-        self.voices=[]
+        self.voices=[];self.audio_clips=[]
         for clip in editor.sequence.ordered():
             asset=editor.library.assets[clip.asset_id]
             if asset.kind=='media' and asset.has_audio:
+                self.audio_clips.append(clip.id)
                 if audio_role(asset,paths)=='voice':self.voices.append(clip.id)
-        if self.voices:self.reference.addItem(f'すべての自分の声（{len(self.voices)}クリップ）',self.voices)
+        self.auto_targets=self.voices or self.audio_clips
+        target_name='自分の声' if self.voices else 'タイムライン上の全音声'
+        if self.auto_targets:
+            self.reference.addItem(f'自動検出：{target_name}（{len(self.auto_targets)}クリップ）',self.auto_targets)
         for clip in editor.sequence.ordered():
+            if clip.id not in self.audio_clips:continue
             asset=editor.library.assets[clip.asset_id]
-            if asset.kind=='media' and asset.has_audio:
-                self.reference.addItem(f'{asset.name} ／ {clip.start/float(editor.sequence.rate):.1f}秒〜',[clip.id])
-        form.addRow('解析する声',self.reference)
+            self.reference.addItem(f'{asset.name} ／ {clip.start/float(editor.sequence.rate):.1f}秒〜',[clip.id])
+        form.addRow('カット判定に使う音',self.reference)
         self.threshold=QDoubleSpinBox();self.threshold.setRange(-70,-10);self.threshold.setValue(-38);self.threshold.setSuffix(' dB')
         self.minimum=QDoubleSpinBox();self.minimum.setRange(.2,10);self.minimum.setValue(.7);self.minimum.setSuffix(' 秒')
         self.padding=QDoubleSpinBox();self.padding.setRange(0,1);self.padding.setValue(.12);self.padding.setSuffix(' 秒')
@@ -63,10 +67,11 @@ class SilenceDialog(QDialog):
         self.ranges=[];self.apply.setEnabled(False)
 
     def start_analysis(self):
-        if not self.reference.currentData():self.status.setText('解析できる音声がありません。先に声の素材を配置してください。');return
+        targets=self.reference.currentData() or self.auto_targets
+        if not targets:self.status.setText('解析できる音声がありません。音声付きの素材をタイムラインに配置してください。');return
         if self.editor.shell.desk.busy:self.status.setText('収録や素材処理の完了後に実行してください。');return
         self.editor.preview.pause();self.invalidate();self.revision=self.editor.revision
-        library=self.editor.library.clone();sid=self.editor.sequence.id;ids=set(self.reference.currentData())
+        library=self.editor.library.clone();sid=self.editor.sequence.id;ids=set(targets)
         threshold,minimum,padding=self.threshold.value(),self.minimum.value(),self.padding.value()
         self.jobs.submit('silence',lambda cancel:analyze_silence(library,sid,ids,threshold,minimum,padding,cancel))
         self.analyze.setEnabled(False);self.cancel.setText('中止して閉じる')

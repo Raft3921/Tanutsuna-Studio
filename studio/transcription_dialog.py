@@ -28,7 +28,7 @@ class TranscriptionDialog(QDialog):
         self.setWindowTitle('自動文字起こし・仮テロップ')
         self.resize(900, 680)
         layout = QVBoxLayout(self)
-        layout.addWidget(note('タイムライン上の音声を選び、字幕を自動生成します。AIモデルはこのPCに保存し、音声も外部へ送らずPC内で処理します。初回だけモデルをダウンロードします。'))
+        layout.addWidget(note('最初は自分の声（役割が未設定の場合は先頭の音声）を自動で選びます。必要なら別の音声へ切り替えてください。AIモデルはこのPCに保存し、音声も外部へ送らずPC内で処理します。初回は選んだモデルをダウンロードします。'))
         form = QFormLayout()
         self.audio = QComboBox()
         self.clips = {}
@@ -117,9 +117,16 @@ class TranscriptionDialog(QDialog):
         self.start_button.clicked.disconnect()
         self.start_button.clicked.connect(self.cancel_job)
         self.status.setText('文字起こしを準備しています…')
-        self.jobs.submit('transcription', lambda cancel: transcribe_clip(
-            asset.path, clip.source_in, clip.duration, clip.start,
-            float(self.editor.sequence.rate), model, language, cancel, self.jobs.progress.emit))
+        try:
+            self.jobs.submit('transcription', lambda cancel: transcribe_clip(
+                asset.path, clip.source_in, clip.duration, clip.start,
+                float(self.editor.sequence.rate), model, language, cancel, self.jobs.progress.emit))
+        except Exception as exc:
+            self._set_inputs(True)
+            self.start_button.setText('文字起こしを開始')
+            self.start_button.clicked.disconnect()
+            self.start_button.clicked.connect(self.start_transcription)
+            self.status.setText(f'文字起こしを開始できませんでした：{exc}')
 
     def cancel_job(self):
         self.jobs.cancel.set()
