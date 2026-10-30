@@ -100,7 +100,10 @@ class GLViewport(QOpenGLWidget):
   gl.glEnable(0x0B71);gl.glEnable(0x0B44);gl.glCullFace(0x0405);gl.glFrontFace(0x0901)
   self.program.bind()
   view=QMatrix4x4();view.lookAt(QVector3D(0,1.22,5.35),QVector3D(0,1.18,0),QVector3D(0,1,0))
-  projection=QMatrix4x4();projection.perspective(32,max(1,self.width())/max(1,self.height()),.05,100)
+  # Leave room for the full head and its camera-tracked translation. At the
+  # previous 32° FOV, the allowed headX/headY movement could push ears or the
+  # forehead outside the transparent frame.
+  projection=QMatrix4x4();projection.perspective(44,max(1,self.width())/max(1,self.height()),.05,100)
   self.program.setUniformValue('viewProjection',projection*view)
   transforms=self.model.transforms(self.pose,self.now)
   orbit=np.eye(4);orbit[:3,:3]=rotation(y=self.orbit);pivot=np.array([0,1.18,0]);orbit[:3,3]=pivot-orbit[:3,:3]@pivot

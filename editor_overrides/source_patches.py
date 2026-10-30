@@ -28,6 +28,8 @@ PATCHES = {
         ('        if asset.id not in self._wave_buffers:\n            self._wave_buffers[asset.id]=self.cache.waveform(asset)\n        peaks=self._wave_buffers[asset.id]',
          '        key = (asset.id, self.cache.source_signature(asset))\n        peaks = self._wave_buffers.get(key)\n        if peaks is None:\n            peaks = self.cache.waveform(asset)\n            if peaks is not None:\n                self._wave_buffers[key] = peaks\n                self._wave_buffers.move_to_end(key)\n                while len(self._wave_buffers) > 64:\n                    self._wave_buffers.popitem(last=False)'),
         ('        self._wave_buffers = {}\n', ''),
+        ('                    for px in range(left,right,2):', '                    for px in range(left,right,4):'),
+        ('source+2/self.scale', 'source+4/self.scale'),
     ],
     'app.py': [
         ("            self.destination_track.addItem(f'映像 V{track + 1}', track)",

@@ -17,7 +17,7 @@ from .jobs import Jobs
 class LivePanel(QWidget):
     def __init__(self,desk):
         super().__init__(desk);self.desk=desk;self.engine=LiveEngine(self);self.audio=None;self.preparing=False;self.previewing=False;self.pending_start=False
-        self.camera_owned=False;self.game=None;self.renderer=None;self.target=None;self.audio_ready=False;self.project=None;self.record_started=False;self.tick_count=0
+        self.camera_owned=False;self.game=None;self.renderer=None;self.cached_avatar=None;self.target=None;self.audio_ready=False;self.project=None;self.record_started=False;self.tick_count=0
         self.jobs=Jobs(self);self.jobs.finished.connect(self.saved)
         from .window_source import NativeWindowSource
         self.native_source=NativeWindowSource(self);self.native_source.listed.connect(self.show_windows);self.native_source.frame.connect(self.received_native);self.native_source.failed.connect(self.capture_error)
@@ -75,11 +75,11 @@ class LivePanel(QWidget):
         status_row=QHBoxLayout();self.status=QLabel('映像は選択したウィンドウだけです。PC全体の音には、通知や他のアプリの音も含まれます。');self.status.setWordWrap(True);status_row.addWidget(self.status,1)
         self.copy_connection_detail=QPushButton('接続詳細をコピー');self.copy_connection_detail.setVisible(False)
         self.copy_connection_detail.clicked.connect(lambda:QApplication.clipboard().setText(self.connection_detail_text));status_row.addWidget(self.copy_connection_detail);outer.addLayout(status_row)
-        self.transport_state='idle';self.performance_overloaded=False
+        self.transport_state='idle';self.performance_overloaded=False;self.last_avatar_render=0
         self.connection_detail_text=''
         self.engine.state.connect(self.state_changed);self.engine.connection_detail.connect(self.connection_detail_changed);self.engine.levels.connect(self.show_levels);self.engine.finished.connect(self.finished)
         # Compose each source frame at the fixed 60fps output cadence.
-        self.timer=QTimer(self);self.timer.setTimerType(Qt.TimerType.PreciseTimer);self.timer.setInterval(16);self.timer.timeout.connect(self.tick);self.timer.start()
+        self.timer=QTimer(self);self.timer.setTimerType(Qt.TimerType.PreciseTimer);self.timer.setInterval(16);self.timer.timeout.connect(self.tick)
         self.monitor=QTimer(self);self.monitor.setInterval(1000);self.monitor.timeout.connect(self.monitor_window);self.monitor.start()
         self.refresh_windows();self.update_mix();self.update_buttons()
 
@@ -167,6 +167,7 @@ class LivePanel(QWidget):
                 if not self.mutes['voice'].isChecked():raise ValueError('マイクの許可がありません。OSの設定で許可するか、マイクを消音にしてください。')
                 voice_available=False
         self.target=window;self.preparing=True;self.previewing=True;self.deadline=time.monotonic()+60
+        self.last_avatar_render=0;self.timer.start()
         try:
             if self.avatar.isChecked():
                 panel=self.desk.vtuber
@@ -250,7 +251,10 @@ class LivePanel(QWidget):
         if self.renderer and self.avatar.isChecked():
             panel=self.desk.vtuber;pose=copy.deepcopy(panel.pose.__dict__);transform['orbit']=panel.orbit.value()
             try:
-                self.cached_avatar=self.renderer.frame(panel.pose,time.monotonic(),panel.orbit.value())
+                now=time.monotonic()
+                if self.cached_avatar is None or now-self.last_avatar_render>=1/30:
+                    self.cached_avatar=self.renderer.frame(panel.pose,now,panel.orbit.value())
+                    self.last_avatar_render=now
                 avatar=self.cached_avatar
                 painter=QPainter(program);painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
                 side=round(width*transform['size']);rect=QRect(round(width*transform['x']-side/2),round(height*transform['y']-side/2),side,side)
@@ -326,9 +330,10 @@ class LivePanel(QWidget):
         for widget in (self.record,self.server,self.key,self.remember):widget.setEnabled(not locked)
 
     def stop_preview(self):
-        self.preparing=False;self.pending_start=False;self.previewing=False;self.stop_capture();self.game=None
+        self.preparing=False;self.pending_start=False;self.previewing=False;self.timer.stop();self.stop_capture();self.game=None
         if self.audio:self.audio.stop();self.audio=None
         if self.renderer:self.renderer.close();self.renderer=None
+        self.cached_avatar=None
         if self.camera_owned and self.desk._vtuber:self.desk._vtuber.stop_tracking()
         self.camera_owned=False;self.mutes['voice'].setEnabled(True)
         for source in self.engine.files.values():source.close()

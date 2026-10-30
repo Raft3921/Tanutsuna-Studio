@@ -6,7 +6,7 @@ from .avatar_gl import GLViewport,surface_format
 
 AVATAR_SIZE=1080
 AVATAR_FILE='vtuber.mov'
-AVATAR_VERSION=3
+AVATAR_VERSION=4
 
 
 class _OfflineViewport(GLViewport):

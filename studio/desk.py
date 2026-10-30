@@ -81,7 +81,7 @@ class ProductionDesk(QWidget):
         self.build_home();self.build_library();self.build_media();self.build_settings()
         self.refresh_projects();self.navigate('home')
         self.update_header()
-        self.folder_timer=QTimer(self);self.folder_timer.setInterval(2000)
+        self.folder_timer=QTimer(self);self.folder_timer.setInterval(5000)
         self.folder_timer.timeout.connect(self.refresh_existing_folders);self.folder_timer.start()
 
     def button(self,title,function,kind=None):
@@ -301,8 +301,6 @@ class ProductionDesk(QWidget):
 
     def refresh_existing_folders(self):
         if self.current and not self.busy:
-            if self.current_page in ('edit','media') and Path(self.current['folder']).is_dir():
-                self.protect(lambda:self.editor.reconcile_media(self.current))
             if self.current_page=='media':self.protect(self.refresh_media)
             if self.current_page=='record' and self._recording_panel:self._recording_panel.refresh()
         if self.current_page=='library' and not self.busy:

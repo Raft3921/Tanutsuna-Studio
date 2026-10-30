@@ -3,8 +3,8 @@ import os
 import sys
 import json
 from PySide6.QtCore import QStandardPaths,QTimer,Qt
-from PySide6.QtGui import QAction,QKeySequence,QIcon
-from PySide6.QtWidgets import QApplication,QMainWindow,QMessageBox,QFileDialog
+from PySide6.QtGui import QAction,QKeySequence,QIcon,QPixmap,QPainter,QColor
+from PySide6.QtWidgets import QApplication,QMainWindow,QMessageBox,QFileDialog,QSplashScreen
 from .workspace import Workspace,DuplicateProject
 from .desk import ProductionDesk
 from .theme import apply_theme
@@ -416,6 +416,10 @@ def main():
     configure_opengl()
     app=QApplication(sys.argv)
     app.setApplicationName('Tanutsuna Studio');app.setOrganizationName('TanutsunaStudio')
+    splash_image=QPixmap(520,180);splash_image.fill(QColor('#171b24'))
+    painter=QPainter(splash_image);painter.setPen(QColor('#f1f4fa'))
+    painter.drawText(splash_image.rect(),Qt.AlignmentFlag.AlignCenter,'たぬつな Studio\n起動しています…')
+    painter.end();splash=QSplashScreen(splash_image);splash.show();app.processEvents()
     root=Path(os.environ.get('TANUTSUNA_TEST_HOME') or QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))
     root.mkdir(parents=True,exist_ok=True)
     default=Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation))/'TanutsunaStudio'
@@ -423,11 +427,13 @@ def main():
         workspace=Workspace(root/'settings.json',default)
         window=StudioWindow(workspace,root)
     except Exception as exc:
+        splash.close()
         import traceback
         (root/'startup-error.log').write_text(traceback.format_exc(),encoding='utf-8')
         if os.environ.get('TANUTSUNA_DIAGNOSTIC'):return 1
         QMessageBox.critical(None,'起動できません',str(exc));return 1
     window.show()
+    splash.finish(window)
     update_token=None
     if '--update-token' in sys.argv:
         try:update_token=sys.argv[sys.argv.index('--update-token')+1]

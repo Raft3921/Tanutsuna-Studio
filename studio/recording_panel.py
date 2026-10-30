@@ -178,6 +178,7 @@ class RecordingPanel(QWidget):
         if take['options']['avatar']:
             self.desk.vtuber.synced_recording = True
             self.motion = (self.folder / 'vtuber-motion.jsonl').open('w', encoding='utf-8', buffering=65536)
+            self.pose_samples = 0
             self.motion.write(json.dumps({'format':'tanutsuna-synced-motion-v1', 'orbit':self.desk.vtuber.orbit.value()})+'\n')
             self.pose_epoch = self.recorder.epoch; self.save_pose(); self.pose_timer.start()
         self.clock.start(); self.show_elapsed()
@@ -187,7 +188,8 @@ class RecordingPanel(QWidget):
             panel = self.desk.vtuber
             # Read only the latest smoothed pose; camera inference stays in its local browser.
             self.motion.write(json.dumps({'time':round(time.perf_counter()-self.pose_epoch,6), 'pose':panel.pose.__dict__}, separators=(',',':'))+'\n')
-            self.motion.flush()
+            self.pose_samples += 1
+            if self.pose_samples % 25 == 0:self.motion.flush()
 
     def end_motion(self):
         if self.desk._vtuber:self.desk._vtuber.synced_recording = False

@@ -206,6 +206,7 @@ class VtuberPanel(QWidget):
         self.output.show();self.output.raise_();self.output.activateWindow()
 
     def tick(self):
+        if not self.isVisible() and not (self.output and self.output.isVisible()) and self.server.server is None and self.recording is None and not getattr(self,'synced_recording',False):return
         label=self.server.state.camera_label
         if label and label!=self._last_camera_label:
             self._last_camera_label=label
@@ -221,7 +222,6 @@ class VtuberPanel(QWidget):
         if abs(stored_voice_gain-voice_gain)>.04:
             QSettings('TanutsunaStudio','Avatar').setValue('voiceMouthGain',voice_gain)
         now=time.monotonic();dt=now-self.last;self.last=now;t=now-self.epoch
-        if not self.isVisible() and not (self.output and self.output.isVisible()) and self.server.server is None and self.recording is None and not getattr(self,'synced_recording',False):return
         mode=self.mode.currentIndex();detected=False
         if mode==2:
             raw,detected,message,last_seen=self.server.state.snapshot()
