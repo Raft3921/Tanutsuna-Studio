@@ -67,7 +67,7 @@ def build():
         'NSMicrophoneUsageDescription':'マイクの声をPC音とは別の音声素材として収録します。',
         'NSScreenCaptureUsageDescription':'選択したゲームウィンドウまたは画面とPC音を配信・録画します。'})
     info.write_bytes(plistlib.dumps(data))
-    shutil.copy2(ROOT/'docs/release-0.9.10.md',bundle/'Contents/Resources/ご利用ガイド.md')
+    shutil.copy2(ROOT/f'docs/release-{VERSION}.md',bundle/'Contents/Resources/ご利用ガイド.md')
     shutil.copytree(ROOT/'build/live-deps/av-17.1.0.dist-info/licenses',bundle/'Contents/Resources/licenses/PyAV',dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__'))
     subprocess.run(['codesign','--force','--deep','--sign','-',str(bundle)],check=True)
     print('Mac検証用アプリ: ' + str(ROOT / 'dist/Tanutsuna Studio.app'))

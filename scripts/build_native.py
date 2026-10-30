@@ -109,7 +109,7 @@ except Exception:
     for name in ['README.md', 'WINDOWS.md', 'SHORTCUTS.md', 'pyproject.toml']:
         shutil.copy2(SOURCE / name, DESTINATION / ('CutRaft-' + name))
     shutil.copy2(ROOT / 'README.md', DESTINATION / 'README.md')
-    shutil.copy2(ROOT / 'docs/release-0.9.10.md', DESTINATION / 'ご利用ガイド.md')
+    shutil.copy2(ROOT / f'docs/release-{VERSION}.md', DESTINATION / 'ご利用ガイド.md')
     (DESTINATION / 'お読みください.txt').write_text('たぬつな 制作デスク / Cut Raft\n\nZIPをすべて展開し、Tanutsuna Studio.exeを開いてください。\napp・runtimeフォルダは移動しないでください。\nPythonやGitの準備は不要です。\nWindows 11 x64向けの未署名の改訂版です。Windows実機の起動・再生・音声・書き出しは未確認です。\n', encoding='utf-8')
     hashes = {str(f.relative_to(DESTINATION)).replace('\\', '/'): hashlib.sha256(f.read_bytes()).hexdigest()
               for f in (DESTINATION / 'app').rglob('*') if f.is_file()}

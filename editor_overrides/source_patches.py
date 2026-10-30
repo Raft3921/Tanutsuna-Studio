@@ -12,8 +12,8 @@ PATCHES = {
          '        video = any(self.assets[c.asset_id].has_video for c in chosen)\n        track = max((c.track for c in chosen if self.assets[c.asset_id].has_video), default=0) if video else min(c.track for c in chosen)'),
     ],
     'timeline.py': [
-        ('import json\nfrom bisect import bisect_left, bisect_right',
-         'import json\nfrom collections import OrderedDict\nfrom bisect import bisect_left, bisect_right'),
+        ('import json\nfrom html import escape',
+         'import json\nfrom collections import OrderedDict\nfrom html import escape'),
         ("        self._filmstrip_signatures = {}\n        self.playhead, self.selected_id, self.selected_ids = 0, '', set()",
          "        self._filmstrip_signatures = {}\n        self._wave_buffers = OrderedDict()\n        self.playhead, self.selected_id, self.selected_ids = 0, '', set()"),
         ("            p.drawText(QRectF(14, y, 48, height), Qt.AlignmentFlag.AlignVCenter, f'V{track + 1}' if track >= 0 else f'A{-track}')",
@@ -54,6 +54,6 @@ def apply_source_patches(package):
             if new in content:
                 continue
             if old not in content:
-                raise RuntimeError(f'Cut Raftの{filename}が想定と異なります。レイヤー表示の変更を適用できません。')
+                raise RuntimeError(f'Cut Raftの{filename}が想定と異なります。適用箇所: {old.splitlines()[0]}')
             content = content.replace(old, new, 1)
         path.write_text(content, encoding='utf-8')
