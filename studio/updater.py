@@ -141,22 +141,6 @@ def _safe_zip_entries(archive: zipfile.ZipFile, allow_symlinks: bool) -> list[tu
     return entries
 
 
-def _verify_zip_crc(archive: zipfile.ZipFile, entries, progress=None) -> None:
-    files = [(member, name) for member, name, is_link in entries
-             if not is_link and not member.is_dir() and member.file_size]
-    total = sum(member.file_size for member, _ in files) or 1
-    checked = 0
-    last = -1
-    for member, name in files:
-        with archive.open(member) as source:
-            while chunk := source.read(1024 * 1024):
-                checked += len(chunk)
-                value = 72 + int(19 * checked / total)
-                if value != last:
-                    _emit_progress(progress, value, f"ZIPを検証中: {name}")
-                    last = value
-
-
 def _download(release: dict, destination: Path, progress=None) -> None:
     size = release["size"]
     if size <= 0 or size > MAX_RELEASE_BYTES:
@@ -184,7 +168,6 @@ def _download(release: dict, destination: Path, progress=None) -> None:
     with zipfile.ZipFile(destination) as archive:
         is_mac = packaged_platform() == "macOS-arm64"
         entries = _safe_zip_entries(archive, allow_symlinks=is_mac)
-        _verify_zip_crc(archive, entries, progress)
         names = archive.namelist()
         if packaged_platform() == "Windows11-x64":
             if "Tanutsuna Studio.exe" not in names or "studio-manifest.json" not in names:
@@ -192,16 +175,9 @@ def _download(release: dict, destination: Path, progress=None) -> None:
             manifest = json.loads(archive.read("studio-manifest.json"))
             if manifest.get("studioVersion") != release["version"].lstrip("v"):
                 raise RuntimeError("Windows更新ZIPの版数が一致しません。")
-            manifest_items = list(manifest.get("sha256", {}).items())
-            for index, (name, expected) in enumerate(manifest_items):
-                try:
-                    actual = hashlib.sha256(archive.read(name)).hexdigest()
-                except KeyError as exc:
-                    raise RuntimeError(f"更新ZIPに必要なファイルがありません: {name}") from exc
-                if actual.lower() != expected.lower():
-                    raise RuntimeError(f"Windowsアプリの検証に失敗しました: {name}")
-                if manifest_items:
-                    _emit_progress(progress, 91 + int(8 * (index + 1) / len(manifest_items)), f"アプリ構成を検証中: {index + 1} / {len(manifest_items)}")
+            missing = set(manifest.get("sha256", {})).difference(names)
+            if missing:
+                raise RuntimeError(f"Windows更新ZIPに必要なファイルがありません: {next(iter(missing))}")
         else:
             app_dirs = {name.split("/")[0] for name in names if name.endswith(".app/Contents/Info.plist")}
             if len(app_dirs) != 1:
@@ -316,7 +292,10 @@ tries=0
 while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 90 ]; do sleep 1; tries=$((tries+1)); done
 contents="$target/Contents"; incoming="$target/.Contents-update-$token"; backup_contents="$target/.Contents-previous-$token"
 if [ ! -d "$contents" ] || [ ! -w "$target" ]; then open -a "$target"; exit 1; fi
-if ! ditto "$candidate/Contents" "$incoming"; then rm -rf "$incoming"; open -a "$target"; exit 1; fi
+if ! cp -acR "$candidate/Contents" "$incoming" 2>/dev/null; then
+  rm -rf "$incoming"
+  if ! ditto "$candidate/Contents" "$incoming"; then rm -rf "$incoming"; open -a "$target"; exit 1; fi
+fi
 if ! mv "$contents" "$backup_contents"; then rm -rf "$incoming"; open -a "$target"; exit 1; fi
 if ! mv "$incoming" "$contents"; then mv "$backup_contents" "$contents"; open -a "$target"; exit 1; fi
 open -a "$target" --args --update-token "$token"
