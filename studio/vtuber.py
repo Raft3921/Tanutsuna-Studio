@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import math
 import shutil
+import sys
 import time
 from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QSettings
@@ -43,7 +44,7 @@ class VtuberPanel(QWidget):
                     self.mouth_shapes[vowel]=(max(.55,min(1.9,width)),max(.15,min(1.3,height)))
         except (ValueError,TypeError):pass
         self.pose=Pose();self.neutral=[0,0,0];self.last=time.monotonic();self.epoch=self.last
-        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.tracking_view=None
+        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.tracking_view=None;self._tracking_load_error=''
         self.setMinimumHeight(420)
         outer=QVBoxLayout(self)
         controls=QHBoxLayout()
@@ -141,11 +142,14 @@ class VtuberPanel(QWidget):
     def start_tracking(self,checked=False,automatic=False):
         try:
             if self.server.server is not None:
-                self.status.setText('カメラ追跡はアプリ内で動作中です。別ウィンドウは開きません。')
+                self.status.setText('カメラ追跡はアプリ内で動作中です。下の状態表示で顔検出を確認できます。')
                 return True
             assets=Path(__file__).parent/'assets/tracker'
             if not (assets/'face_landmarker.task').is_file():raise ValueError('追跡モデルがありません。配布ZIPをすべて展開してください。')
-            self.server.state.camera_label='';self.server.state.microphone_label='';self._last_camera_label='';self._last_microphone_label=''
+            with self.server.state.lock:
+                self.server.state.camera_label='';self.server.state.microphone_label='';self.server.state.detected=False;self.server.state.message='準備中'
+            self._last_camera_label='';self._last_microphone_label=''
+            self._tracking_load_error=''
             url=self.server.start()
             self.mode.setCurrentIndex(2)
             self.neutral=[0,0,0]
@@ -156,8 +160,9 @@ class VtuberPanel(QWidget):
                 self.tracking_view=TrackingView(self.window())
                 self.tracking_view.statusChanged.connect(self.tracking_view_status)
             self.tracking_view.start(url)
-            self.status.setText('アプリ内でカメラ追跡を開始しました。初回のみOSのカメラ・マイク許可が必要です。')
-            self.start_button.setText('カメラ追跡中')
+            self.status.setText('カメラを準備しています。顔を検出すると「カメラ追跡中」に変わります。')
+            self._last_status=''
+            self.start_button.setText('カメラ準備中…')
             return True
         except Exception as exc:
             if automatic:raise
@@ -173,13 +178,14 @@ class VtuberPanel(QWidget):
 
     def stop_tracking(self):
         self.server.stop();self.server.state.detected=False
-        self.mode.setCurrentIndex(0);self.start_button.setText('カメラ追跡を開始')
+        self.mode.setCurrentIndex(0);self.start_button.setText('カメラ追跡を開始');self._last_status=''
         self.status.setText('カメラ入力と追跡を停止しました。')
         if self.tracking_view:self.tracking_view.stop()
 
     def tracking_view_status(self,ok,message):
+        self._tracking_load_error='' if ok else message
         if not ok and self.server.server is not None:
-            self.status.setText(message)
+            self.status.setText(message);self._last_status=message
 
     def calibrate(self):
         raw,detected,_,_=self.server.state.snapshot()
@@ -223,7 +229,27 @@ class VtuberPanel(QWidget):
                 'pitch':max(-40,min(40,(raw.pitch-self.neutral[1])*gain)),'roll':max(-40,min(40,(raw.roll-self.neutral[2])*gain)),
                 'headX':max(-.65,min(.65,raw.headX*move)),'headY':max(-.45,min(.45,raw.headY*move)),
                 'headZ':max(-.55,min(.55,raw.headZ*move)), 'jawOpen':min(1,max(0,raw.jawOpen)*self.mouth_gain.value())}) if detected else Pose(jawOpen=0)
-            status=('カメラ追跡中' if detected else '追跡信号なし・待機姿勢')+f'  左右 {self.pose.yaw:.0f}° / 上下 {self.pose.pitch:.0f}° / 傾き {self.pose.roll:.0f}°'
+            if detected:
+                status=f'カメラ追跡中  左右 {self.pose.yaw:.1f}° / 上下 {self.pose.pitch:.1f}° / 傾き {self.pose.roll:.1f}°'
+                self.start_button.setText('カメラ追跡中')
+            elif self._tracking_load_error:
+                status=self._tracking_load_error
+                self.start_button.setText('追跡画面エラー')
+            elif message.startswith(('開始できません：','カメラを開けませんでした')):
+                status=message
+                if 'アクセスが拒否' in message or 'NotAllowedError' in message:
+                    if sys.platform=='win32':
+                        status+=' Windows「設定 > プライバシーとセキュリティ > カメラ」で「カメラへのアクセス」と「デスクトップ アプリにカメラへのアクセスを許可する」をオンにしてください。'
+                self.start_button.setText('カメラを確認')
+            elif message=='カメラ追跡中':
+                status='追跡データが途切れました。顔をカメラに向け、カメラを他のアプリが使用していないか確認してください。'
+                self.start_button.setText('追跡信号を確認中…')
+            elif message in ('未接続','追跡中'):
+                status='カメラを準備しています。顔を検出すると動き始めます。'
+                self.start_button.setText('カメラ準備中…')
+            else:
+                status=message or '顔を探しています。カメラに顔全体が映るようにしてください。'
+                self.start_button.setText('顔を探しています…')
             if status!=self._last_status:self.status.setText(status);self._last_status=status
         elif mode==1:
             target=Pose(yaw=math.sin(t*.8)*32,pitch=math.sin(t*1.1)*16,roll=math.sin(t*.6)*12,
