@@ -9,11 +9,13 @@ import re
 import subprocess
 import sys
 import stat
+import threading
 import urllib.error
 import urllib.request
 import uuid
 import zipfile
 import plistlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 from pathlib import Path
 
@@ -98,6 +100,74 @@ def _emit_progress(progress, value: int, message: str) -> None:
         progress(max(0, min(100, int(value))), message)
 
 
+def _download_ranges(url: str, size: int, destination: Path, progress=None) -> bool:
+    """Use concurrent byte ranges when the GitHub asset CDN supports them."""
+    block_size = 8 * 1024 * 1024
+    workers = 8
+    headers = {"Accept": "application/octet-stream", "Accept-Encoding": "identity",
+               "User-Agent": "Tanutsuna-Studio-Updater"}
+    try:
+        probe = urllib.request.Request(url, headers={**headers, "Range": "bytes=0-0"})
+        with urllib.request.urlopen(probe, timeout=30) as response:
+            if response.status != 206 or response.headers.get("Content-Range") != f"bytes 0-0/{size}":
+                return False
+            response.read(1)
+    except (OSError, urllib.error.URLError):
+        return False
+
+    ranges = [(start, min(size - 1, start + block_size - 1))
+              for start in range(0, size, block_size)]
+    lock = threading.Lock()
+    cancelled = threading.Event()
+    received = 0
+    last_progress = -1
+    try:
+        with destination.open("w+b") as output:
+            output.truncate(size)
+
+            def fetch(byte_range):
+                nonlocal received, last_progress
+                if cancelled.is_set():
+                    return
+                start, end = byte_range
+                expected = end - start + 1
+                request = urllib.request.Request(url, headers={**headers,
+                    "Range": f"bytes={start}-{end}"})
+                for attempt in range(3):
+                    if cancelled.is_set():
+                        return
+                    try:
+                        with urllib.request.urlopen(request, timeout=120) as response:
+                            if response.status != 206 or response.headers.get("Content-Range") != f"bytes {start}-{end}/{size}":
+                                raise RuntimeError("更新サーバーが要求した範囲を返しませんでした。")
+                            data = response.read(expected + 1)
+                            if len(data) != expected:
+                                raise RuntimeError("更新サーバーから受け取った範囲のサイズが一致しません。")
+                        with lock:
+                            output.seek(start)
+                            output.write(data)
+                            received += len(data)
+                            value = int(70 * received / size)
+                            if value != last_progress:
+                                _emit_progress(progress, value,
+                                    f"更新を並列ダウンロード中: {received // (1024 * 1024)} / {size // (1024 * 1024)} MB")
+                                last_progress = value
+                        return
+                    except (OSError, urllib.error.URLError, RuntimeError):
+                        if attempt == 2:
+                            cancelled.set()
+                            raise
+
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="Studio-update") as pool:
+                list(pool.map(fetch, ranges))
+            output.flush()
+        return True
+    except Exception:
+        cancelled.set()
+        destination.unlink(missing_ok=True)
+        return False
+
+
 def _safe_zip_entries(archive: zipfile.ZipFile, allow_symlinks: bool) -> list[tuple[zipfile.ZipInfo, str, bool]]:
     """Reject traversal/special files while allowing contained Mac app links."""
     entries = []
@@ -151,22 +221,29 @@ def _download(release: dict, destination: Path, progress=None) -> None:
     size = release["size"]
     if size <= 0 or size > MAX_RELEASE_BYTES:
         raise RuntimeError("配布ファイルのサイズが許容範囲外です。")
-    request = urllib.request.Request(release["url"], headers={
-        "Accept": "application/octet-stream", "User-Agent": "Tanutsuna-Studio-Updater"})
     digest = hashlib.sha256()
-    received = 0
-    last = -1
-    with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
-        while chunk := response.read(1024 * 1024):
-            received += len(chunk)
-            if received > size or received > MAX_RELEASE_BYTES:
-                raise RuntimeError("配布ファイルの実サイズが宣言値を超えました。")
-            output.write(chunk)
-            digest.update(chunk)
-            value = int(70 * received / size)
-            if value != last:
-                _emit_progress(progress, value, f"更新をダウンロード中: {received // (1024 * 1024)} / {size // (1024 * 1024)} MB")
-                last = value
+    received = size
+    if _download_ranges(release["url"], size, destination, progress):
+        _emit_progress(progress, 71, "分割ダウンロードを結合し、SHA-256を確認中…")
+        with destination.open("rb") as source:
+            while chunk := source.read(8 * 1024 * 1024):
+                digest.update(chunk)
+    else:
+        request = urllib.request.Request(release["url"], headers={
+            "Accept": "application/octet-stream", "User-Agent": "Tanutsuna-Studio-Updater"})
+        received = 0
+        last = -1
+        with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
+            while chunk := response.read(1024 * 1024):
+                received += len(chunk)
+                if received > size or received > MAX_RELEASE_BYTES:
+                    raise RuntimeError("配布ファイルの実サイズが宣言値を超えました。")
+                output.write(chunk)
+                digest.update(chunk)
+                value = int(70 * received / size)
+                if value != last:
+                    _emit_progress(progress, value, f"更新をダウンロード中: {received // (1024 * 1024)} / {size // (1024 * 1024)} MB")
+                    last = value
     if received != size or digest.hexdigest().lower() != release["sha256"].lower():
         destination.unlink(missing_ok=True)
         raise RuntimeError("ダウンロードの検証に失敗しました。現在のアプリは変更していません。")
