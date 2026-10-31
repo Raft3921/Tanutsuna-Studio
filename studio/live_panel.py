@@ -26,7 +26,7 @@ class LivePanel(QWidget):
         self.sink.videoFrameChanged.connect(self.received);self.capture.errorOccurred.connect(self.capture_error)
         outer=QVBoxLayout(self);outer.setContentsMargins(24,18,24,18)
         title=QLabel('ライブ配信');title.setObjectName('PageTitle');outer.addWidget(title)
-        top=QHBoxLayout();self.windows=QComboBox();self.windows.setPlaceholderText('取得するゲームのウィンドウ');self.windows.setMinimumWidth(220);self.windows.currentIndexChanged.connect(self.choose_window)
+        top=QHBoxLayout();self.windows=QComboBox();self.windows.setPlaceholderText('取得するゲームのウィンドウ');self.windows.setMinimumWidth(220);self.windows.currentIndexChanged.connect(self.choose_window);self.windows.currentIndexChanged.connect(self.update_buttons)
         refresh=QPushButton('ウィンドウを更新');refresh.clicked.connect(self.refresh_windows)
         self.quality=QComboBox();self.quality.addItem('標準 1080p / 60fps',(1920,1080));self.quality.addItem('軽量 720p / 60fps',(1280,720));self.quality.setCurrentIndex(1)
         for widget in (self.windows,refresh,self.quality):top.addWidget(widget)
@@ -64,12 +64,13 @@ class LivePanel(QWidget):
             saved_server='rtmp://a.rtmp.youtube.com:1935/live2'
         self.server=QLineEdit(saved_server or 'rtmp://a.rtmp.youtube.com:1935/live2')
         self.key=QLineEdit();self.key.setEchoMode(QLineEdit.EchoMode.Password);self.key.setPlaceholderText('YouTube Studioのストリームキー')
+        self.key.textChanged.connect(self.update_buttons)
         self.remember=QCheckBox('キーをOSの資格情報ストアへ保存する');self.secret_loaded=False
         form.addRow('ストリームURL',self.server);form.addRow('ストリームキー',self.key);outer.addLayout(form)
         outer.addWidget(QLabel('Studioに表示されたURLをそのまま使います。暗号化する場合は鍵アイコンからRTMPS URLをコピーしてください。RTMPは暗号化されません。'))
         outer.addWidget(self.remember)
-        row=QHBoxLayout();self.preview_button=QPushButton('映像を確認');self.preview_button.clicked.connect(lambda:desk.protect(self.prepare_preview));row.addWidget(self.preview_button)
-        self.start=QPushButton('YouTubeへ配信開始（自動準備）');self.start.setObjectName('Primary');self.start.clicked.connect(lambda:desk.protect(self.begin));row.addWidget(self.start)
+        row=QHBoxLayout();self.preview_button=QPushButton('映像を確認');self.preview_button.setToolTip('先に取得するゲームのウィンドウを選択してください。プレビューにYouTubeキーは不要です。');self.preview_button.clicked.connect(lambda:desk.protect(self.prepare_preview));row.addWidget(self.preview_button)
+        self.start=QPushButton('YouTubeへ配信開始（自動準備）');self.start.setObjectName('Primary');self.start.setToolTip('ゲームのウィンドウとYouTube Studioのストリームキーが必要です。');self.start.clicked.connect(lambda:desk.protect(self.begin));row.addWidget(self.start)
         self.stop=QPushButton('停止');self.stop.setEnabled(False);self.stop.clicked.connect(self.stop_all);row.addWidget(self.stop)
         self.elapsed=QLabel('停止中');row.addWidget(self.elapsed);row.addStretch();studio=QPushButton('YouTube Studio');studio.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://studio.youtube.com/')));row.addWidget(studio);outer.addLayout(row)
         status_row=QHBoxLayout();self.status=QLabel('映像は選択したウィンドウだけです。PC全体の音には、通知や他のアプリの音も含まれます。');self.status.setWordWrap(True);status_row.addWidget(self.status,1)
@@ -82,6 +83,7 @@ class LivePanel(QWidget):
         self.timer=QTimer(self);self.timer.setTimerType(Qt.TimerType.PreciseTimer);self.timer.setInterval(16);self.timer.timeout.connect(self.tick)
         self.monitor=QTimer(self);self.monitor.setInterval(1000);self.monitor.timeout.connect(self.monitor_window);self.monitor.start()
         self.refresh_windows();self.update_mix();self.update_buttons()
+        if self.windows.currentData() is None:self.status.setText('先にゲームのウィンドウを選択してください。映像確認にYouTubeキーは不要です。')
 
     @property
     def busy(self):return self.preparing or self.engine.active or self.jobs.busy
@@ -152,10 +154,12 @@ class LivePanel(QWidget):
         if self.previewing and self.capture.isActive() and frame.isValid():self.game=frame.toImage()
 
     def prepare_preview(self):
-        self.load_secret()
         if self.previewing:return
         window=self.windows.currentData()
-        if window is None:raise ValueError('取得するゲームのウィンドウを選択してください。')
+        if window is None:
+            self.status.setText('映像確認の前に、取得するゲームのウィンドウを選択してください。YouTubeキーはプレビューには不要です。')
+            return False
+        self.load_secret()
         if self.desk.busy:raise ValueError('収録・素材の処理を完了してから配信を準備してください。')
         app=QApplication.instance();permission=QMicrophonePermission()
         voice_available=bool(QMediaDevices.audioInputs())
@@ -193,8 +197,13 @@ class LivePanel(QWidget):
 
     def begin(self):
         if self.engine.active or self.pending_start:return
+        if self.windows.currentData() is None:
+            self.status.setText('配信開始の前に、取得するゲームのウィンドウを選択してください。')
+            return False
         self.load_secret()
-        server,key=stream_settings(self.server.text(),self.key.text())
+        try:server,key=stream_settings(self.server.text(),self.key.text())
+        except ValueError as exc:
+            self.status.setText(str(exc));return False
         self.server.setText(server);self.key.setText(key)
         self.project=None
         self.connection_detail_text='';self.copy_connection_detail.setVisible(False)
@@ -324,7 +333,9 @@ class LivePanel(QWidget):
 
     def update_buttons(self):
         locked=self.engine.active or self.preparing or self.pending_start or self.jobs.busy
-        self.start.setEnabled(not locked);self.preview_button.setEnabled(not locked and not self.previewing)
+        has_window=self.windows.currentData() is not None
+        has_key=bool(self.key.text().strip())
+        self.start.setEnabled(not locked and has_window and has_key);self.preview_button.setEnabled(not locked and not self.previewing and has_window)
         self.stop.setEnabled(self.previewing or self.engine.active or self.pending_start)
         for widget in (self.quality,self.avatar,self.mics,self.camera_choice):widget.setEnabled(not locked and not self.previewing)
         for widget in (self.record,self.server,self.key,self.remember):widget.setEnabled(not locked)

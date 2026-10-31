@@ -31,6 +31,7 @@ def restore_webengine_framework_layout(bundle):
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / 'studio/version.py').read_text(encoding='utf-8').split('STUDIO_VERSION = "', 1)[1].split('"', 1)[0]
 NUMPY_VERSION = '2.5.4'
+IMAGEIO_FFMPEG_VERSION = '0.6.0'
 
 def build():
     if sys.platform != 'darwin':
@@ -51,6 +52,12 @@ def build():
             raise ImportError(f'NumPy {NUMPY_VERSION} が必要です')
     except ImportError:
         subprocess.run([sys.executable,'-m','pip','install',f'numpy=={NUMPY_VERSION}'],check=True)
+    try:
+        import imageio_ffmpeg
+        if imageio_ffmpeg.__version__ != IMAGEIO_FFMPEG_VERSION:
+            raise ImportError(f'imageio-ffmpeg {IMAGEIO_FFMPEG_VERSION} が必要です')
+    except ImportError:
+        subprocess.run([sys.executable,'-m','pip','install',f'imageio-ffmpeg=={IMAGEIO_FFMPEG_VERSION}'],check=True)
     if not (app / 'cutraft/app.py').is_file():
         raise SystemExit('先に scripts/build_native.py --prepare-only を実行してください。')
     # Reapply the maintained fixes without copying the Windows runtime.
@@ -59,7 +66,7 @@ def build():
         shutil.copy2(source, app / 'cutraft' / source.name)
     args = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--windowed', '--onedir',
         '--name', 'Tanutsuna Studio', '--osx-bundle-identifier', 'com.tanutsuna.studio',
-        '--paths', str(app), '--paths',str(ROOT/'build/live-deps'),'--collect-all','av','--collect-all','numpy','--collect-all', 'imageio_ffmpeg',
+        '--paths', str(app), '--paths',str(ROOT/'build/live-deps'),'--collect-all','av','--collect-all','numpy','--collect-all','imageio_ffmpeg',
         '--icon', str(app / 'cutraft/resources/icons/cutraft.icns'),
         '--add-data', str(app / 'cutraft/resources') + ':cutraft/resources',
         '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build/mac'),
