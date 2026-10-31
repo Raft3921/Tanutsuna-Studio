@@ -70,6 +70,8 @@ class ProductionDesk(QWidget):
         self.context=text('YOUR WORKSPACE','Eyebrow');titles.addWidget(self.context)
         self.project_heading=text('動画をつくる','ProjectTitle');titles.addWidget(self.project_heading)
         bar.addLayout(titles);bar.addStretch()
+        self.update_action_button=self.button('更新があります',self.editor.update_action,'UpdateAction')
+        self.update_action_button.hide();bar.addWidget(self.update_action_button)
         self.capture_badge=self.button('収録停止中',lambda:self.navigate('live' if self.current_page=='live' or (self._live and self._live.busy) else 'record'),'Ghost');bar.addWidget(self.capture_badge)
         self.rename_button=self.button('名前を変更',self.rename_project,'Ghost');bar.addWidget(self.rename_button)
         self.save_label=text('自動保存','SaveState');bar.addWidget(self.save_label)

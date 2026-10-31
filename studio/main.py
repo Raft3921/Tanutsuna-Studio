@@ -24,6 +24,7 @@ class StudioWindow(QMainWindow):
         self.media_jobs=Jobs(self);self.media_jobs.finished.connect(self.media_finished)
         self.pending_media=None
         self.update_worker=None;self.update_release=None;self.update_package=None
+        self._update_action_mode=None
         self.setWindowTitle('たぬつな Studio');self.resize(1360,900);self.setMinimumSize(1120,740)
         self.desk=ProductionDesk(self,workspace);self.setCentralWidget(self.desk)
         menu=self.menuBar().addMenu('ファイル')
@@ -362,6 +363,10 @@ class StudioWindow(QMainWindow):
         self.desk.update_install_button.setEnabled(False)
         labels={'check':'GitHubで最新版を確認しています…','download':'更新ファイルを取得・検証しています…','install':'アプリを安全に入れ替える準備をしています…'}
         self.desk.update_status.setText(labels[action])
+        self._update_action_mode=action
+        if action in ('download','install'):
+            self.desk.update_action_button.setEnabled(False)
+            self.desk.update_action_button.setText('更新をダウンロード中…' if action=='download' else '更新を適用中…')
         if action in ('download','install'):
             self.desk.update_progress.setValue(0);self.desk.update_progress.show()
         else:self.desk.update_progress.hide()
@@ -373,6 +378,9 @@ class StudioWindow(QMainWindow):
     def _update_progress(self,value,message):
         self.desk.update_progress.setValue(value)
         self.desk.update_status.setText(message)
+        if self._update_action_mode in ('download','install'):
+            action_label='ダウンロード' if self._update_action_mode=='download' else '適用'
+            self.desk.update_action_button.setText(f'更新{action_label}中 · {value}%')
 
     def check_for_updates(self):
         self._start_update_worker('check')
@@ -391,16 +399,28 @@ class StudioWindow(QMainWindow):
             return
         self._start_update_worker('install',self.update_release,self.update_package)
 
+    def update_action(self):
+        """Keep the startup update offer actionable from every workspace page."""
+        if self.update_package and self.update_package.is_file():
+            return self.install_update()
+        if self.update_release and not self.update_release.get('unsupported'):
+            return self.download_update()
+
     def _update_finished(self,action,result):
         self.desk.update_check_button.setEnabled(True)
         if result.get('error'):
             self.desk.update_status.setText('更新できませんでした。現在のアプリはそのままです。 '+result['error'])
             self.desk.update_download_button.setEnabled(bool(self.update_release and self.update_release.get('available') and not self.update_release.get('unsupported')))
             self.desk.update_install_button.setEnabled(bool(self.update_package and self.update_package.is_file()))
+            if self.update_release and not self.update_release.get('unsupported'):
+                self.desk.update_action_button.setText('更新を再試行' if not self.update_package else '再起動して更新')
+                self.desk.update_action_button.setEnabled(True);self.desk.update_action_button.show()
         elif action=='check':
             self.desk.update_progress.hide()
             if result.get('available'):
                 self.update_release=result
+                self.update_package=None
+                self.desk.update_install_button.setEnabled(False)
                 size=result.get('size',0)
                 size_label=f"{max(1,size//1024)} KB" if size<1024*1024 else f"{size/(1024*1024):.1f} MB"
                 if result.get('delta'):
@@ -410,9 +430,15 @@ class StudioWindow(QMainWindow):
                 if result.get('unsupported'):
                     self.desk.update_status.setText(f"新しい版 {result['version']} があります。Releaseページからお使いの起動方式に合う更新を取得してください。")
                     self.desk.update_download_button.setEnabled(False)
-                else:self.desk.update_download_button.setEnabled(True)
+                    self.desk.update_action_button.hide()
+                else:
+                    self.desk.update_download_button.setEnabled(True)
+                    self.desk.update_action_button.setText(f"更新あり · {result['version']}")
+                    self.desk.update_action_button.setEnabled(True);self.desk.update_action_button.show()
             else:
                 self.update_release=None
+                self.update_package=None
+                self.desk.update_action_button.hide()
                 self.desk.update_status.setText(f"最新版です（{result.get('version','')}）。")
         elif action=='download':
             self.update_package=Path(result['package'])
@@ -421,6 +447,8 @@ class StudioWindow(QMainWindow):
             self.desk.update_status.setText(f"{result['version']} の{kind}を取得し、サイズ・SHA-256・ZIP構成を確認しました。再起動して適用できます。")
             self.desk.update_download_button.setEnabled(False)
             self.desk.update_install_button.setEnabled(True)
+            self.desk.update_action_button.setText('再起動して更新')
+            self.desk.update_action_button.setEnabled(True);self.desk.update_action_button.show()
         elif action=='install' and result.get('restarting'):
             self.desk.update_progress.setValue(100)
             self.desk.update_status.setText('更新を適用して再起動します。起動確認ができない場合は自動で前の版へ戻します。')
