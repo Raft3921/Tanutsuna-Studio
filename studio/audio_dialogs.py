@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPushButto
     QTabWidget,QWidget,QSpinBox,QFileDialog)
 from .jobs import Jobs
 from .audio_tools import ROLES,role_paths,audio_role,analyze_silence,cut_library,apply_mix
+from .audio_targets import audio_sources
 
 
 def note(text):
@@ -19,7 +20,7 @@ class SilenceDialog(QDialog):
         self.jobs=Jobs(self);self.jobs.finished.connect(self.finished_analysis)
         layout=QVBoxLayout(self)
         layout.addWidget(note('声の休止区間を調べ、画面・PC音・マイク・V体・BGMを同じ時間でカットします。後ろの素材も一緒に前へ詰めます。元ファイルは保持し、編集の「元に戻す」で取り消せます。'))
-        layout.addWidget(note('解析対象は現在開いている編集版です。複合クリップは中を開いて実行します。同じ複合クリップを使う親の編集版も同期して短縮します。音量変更・ミュート前の元音声を解析します。'))
+        layout.addWidget(note('解析対象は現在開いている編集版です。複合クリップを選ぶと、中にある音声をまとめて解析し、その複合クリップの時間位置でカットします。同じ複合クリップを使う親の編集版も同期して短縮します。'))
         form=QFormLayout();self.reference=QComboBox();paths=role_paths(editor.shell.desk.selected_project())
         self.preset=QComboBox()
         self.preset.addItem('おすすめ（会話を残してカット）',(-38,.7,.12))
@@ -29,9 +30,10 @@ class SilenceDialog(QDialog):
         self.voices=[];self.audio_clips=[]
         for clip in editor.sequence.ordered():
             asset=editor.library.assets[clip.asset_id]
-            if asset.kind=='media' and (asset.has_audio or asset.has_video):
+            leaves=audio_sources(editor.library,editor.sequence,clip_ids={clip.id})
+            if asset.kind in ('media','compound') and leaves:
                 self.audio_clips.append(clip.id)
-                if audio_role(asset,paths)=='voice':self.voices.append(clip.id)
+                if asset.kind=='media' and audio_role(asset,paths)=='voice':self.voices.append(clip.id)
         self.auto_targets=self.voices or self.audio_clips
         target_name='自分の声' if self.voices else 'タイムライン上の全音声'
         if self.auto_targets:

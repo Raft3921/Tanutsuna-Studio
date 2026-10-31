@@ -9,6 +9,7 @@ from cutraft.model import Clip, uid
 from cutraft.media_cache import ffmpeg_executable
 from .jobs import run_command
 from .takes import takes_for
+from .audio_targets import audio_sources
 
 ROLES = {'voice':'自分の声', 'desktop':'ゲーム・PC音', 'sfx':'効果音・追加音', 'bgm':'BGM'}
 
@@ -96,21 +97,22 @@ def analyze_silence(library, sequence_id, clip_ids, threshold, minimum, padding,
     seq=next(s for s in library.sequences if s.id==sequence_id);rate=float(seq.rate)
     candidates=[];speaking=[];analyzed=0
     with tempfile.TemporaryDirectory(prefix='tanutsuna-silence-') as directory:
-        for index,clip in enumerate(c for c in seq.clips if c.id in clip_ids):
-            asset=library.assets[clip.asset_id]
-            if asset.kind!='media' or not has_audio_stream(asset.path):continue
+        sources=audio_sources(library,seq,clip_ids=set(clip_ids))
+        for index,source in enumerate(sources):
+            if not has_audio_stream(source.path):continue
             analyzed+=1
-            duration=clip.duration/rate;log=Path(directory)/f'{index}.log'
+            duration=source.duration_seconds;log=Path(directory)/f'{index}.log'
             run_command([ffmpeg_executable(),'-hide_banner','-nostdin','-nostats','-threads','1',
-                '-ss',f'{clip.source_in/rate:.9f}','-i',asset.path,'-t',f'{duration:.9f}',
+                '-ss',f'{source.source_seconds:.9f}','-i',source.path,'-t',f'{duration:.9f}',
                 '-vn','-filter_threads','1','-af',f'silencedetect=noise={threshold}dB:d={minimum}',
                 '-f','null','-'],log,cancel)
             with log.open(encoding='utf-8',errors='replace') as stream:silent=parse_silences(stream,duration)
             # Round inward; retain padding at both sides of each detected pause.
-            local=merge_ranges((max(clip.start,clip.start+math.ceil((a+padding)*rate)),
-                min(clip.end,clip.start+math.floor((b-padding)*rate))) for a,b in silent)
+            start_frame=round(source.timeline_seconds*rate)
+            local=merge_ranges((max(start_frame,start_frame+math.ceil((a+padding)*rate)),
+                min(start_frame+round(duration*rate),start_frame+math.floor((b-padding)*rate))) for a,b in silent)
             candidates.extend(local)
-            speaking.extend(subtract_ranges([(clip.start,clip.end)],local))
+            speaking.extend(subtract_ranges([(start_frame,start_frame+round(duration*rate))],local))
     if not analyzed:
         raise ValueError('選択した動画・音声素材から音声を検出できませんでした。音声が聞こえる素材をタイムラインに配置してください。')
     # If two voice recordings overlap, keep any interval where either is speaking.

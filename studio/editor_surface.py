@@ -15,6 +15,7 @@ class EditorSurface(MainWindow):
         self.shell=shell
         self._internal_open=False
         super().__init__()
+        self.preview.video.transformEdited.connect(self.apply_canvas_transform)
         # A Python application-wide filter wraps native objects during destruction.
         # Qt/Shiboken can crash before eventFilter is entered; use widget key events.
         QApplication.instance().removeEventFilter(self)
@@ -86,6 +87,33 @@ class EditorSurface(MainWindow):
     def open_subtitles(self):
         from .subtitle_library import SubtitleLibrary
         SubtitleLibrary(self).exec()
+
+    def select_clip(self, clip_id):
+        super().select_clip(clip_id)
+        self.preview.editing_clip_id = clip_id or ''
+        self.preview.video.update()
+
+    def apply_canvas_transform(self, clip_id, x, y, scale, scale_x, scale_y, rotation):
+        clip = next((item for item in self.sequence.clips if item.id == clip_id), None)
+        if clip is None:
+            return
+        source = clip.source_in + self.timeline.playhead - clip.start
+        values = {'x':x, 'y':y, 'scale':scale, 'scale_x':scale_x,
+                  'scale_y':scale_y, 'rotation':rotation}
+        def apply():
+            for name, value in values.items():
+                if name in clip.transform_keys:
+                    clip.transform_keys[name][source] = value
+                elif name in ('x','y','scale'):
+                    setattr(clip,name,value)
+                else:
+                    clip.transform_keys[name] = {clip.source_in:value}
+        if self.commit('プレビュー上で素材を変形', apply):
+            self.preview.transforms.clear()
+            self.preview.extra_transforms.clear()
+            self.preview.editing_clip_id = clip_id
+            self.preview.video.update()
+            self.refresh_transform()
 
     def open_silence(self):
         if self.shell.desk.busy:self.statusBar().showMessage('収録や素材の処理を完了してから実行してください。');return

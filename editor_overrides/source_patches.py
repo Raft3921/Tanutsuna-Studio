@@ -4,6 +4,10 @@ from pathlib import Path
 
 PATCHES = {
     'model.py': [
+        ('        if not keys:\n            return getattr(self, name)',
+         "        if not keys:\n            return getattr(self, name, {'rotation': 0.0, 'scale_x': 1.0, 'scale_y': 1.0}.get(name, 0.0))"),
+        ("            limits = {'x': (-100000, 100000), 'y': (-100000, 100000), 'scale': (.01, 10), 'opacity': (0, 1)}",
+         "            limits = {'x': (-100000, 100000), 'y': (-100000, 100000), 'scale': (.01, 10), 'opacity': (0, 1), 'scale_x': (.01, 10), 'scale_y': (.01, 10), 'rotation': (-3600, 3600)}"),
         ('            if not 0 <= clip.volume <= 1:\n                raise ValueError("音量は 0〜100% で指定してください。")',
          '            if not 0 <= clip.volume <= 5:\n                raise ValueError("音量は 0〜500% で指定してください。")'),
         ('or not 0 <= value <= 1):\n                    raise ValueError("音量キーフレームの範囲が不正です。")',
@@ -70,6 +74,8 @@ PATCHES = {
         ('        if not a.has_video and track >= 0:', '        if not a.has_video and track > 0:'),
     ],
     'rendering.py': [
+        ('                tx, ty, size, opacity = clip.transform_at(clip.source_in+frame-clip.start)\n                scale = min(self.width/image.width(), self.height/image.height())*size\n                w, h = image.width()*scale, image.height()*scale\n                painter.setOpacity(opacity)\n                painter.drawImage(QRectF((self.width-w)/2+tx*self.width/sequence.width,\n                                        (self.height-h)/2+ty*self.height/sequence.height, w, h), image)',
+         "                source = clip.source_in+frame-clip.start\n                tx, ty, size, opacity = clip.transform_at(source)\n                sx, sy = clip.value_at('scale_x', source), clip.value_at('scale_y', source)\n                angle = clip.value_at('rotation', source)\n                scale = min(self.width/image.width(), self.height/image.height())*size\n                w, h = image.width()*scale*sx, image.height()*scale*sy\n                cx, cy = self.width/2+tx*self.width/sequence.width, self.height/2+ty*self.height/sequence.height\n                painter.save(); painter.translate(cx, cy); painter.rotate(angle); painter.setOpacity(opacity)\n                painter.drawImage(QRectF(-w/2, -h/2, w, h), image); painter.restore()"),
         ('                if clip.track < 0:\n                    continue\n                asset = self.library.assets[clip.asset_id]',
          '                asset = self.library.assets[clip.asset_id]\n                if not asset.has_video:\n                    continue'),
     ],

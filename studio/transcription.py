@@ -96,9 +96,21 @@ def ensure_model(name, cancel, progress):
 
 def transcribe_clip(asset_path, source_in, duration, timeline_start, rate, model, language, cancel, progress):
     """Return timeline-second SRT cues from one media clip; all inference stays local."""
-    asset_path = Path(asset_path)
-    if not asset_path.is_file():
-        raise ValueError('選んだクリップの素材ファイルが見つかりません。')
+    from .audio_targets import AudioSource
+    source = AudioSource(str(asset_path), source_in / rate, duration / rate,
+                         timeline_start / rate, '')
+    return transcribe_sources([source], timeline_start / rate, duration / rate,
+                              model, language, cancel, progress)
+
+
+def transcribe_sources(sources, timeline_start, duration, model, language, cancel, progress):
+    """Transcribe a clip's mixed audio leaves, including nested compositions."""
+    sources = list(sources)
+    if not sources:
+        raise ValueError('選んだクリップ内に音声素材がありません。')
+    missing = [source.path for source in sources if not Path(source.path).is_file()]
+    if missing:
+        raise ValueError('選んだ複合クリップ内の音声素材が見つかりません。')
     engine = engine_path()
     with tempfile.TemporaryDirectory(prefix='tanutsuna-transcript-') as temp:
         temp = Path(temp)
@@ -106,10 +118,22 @@ def transcribe_clip(asset_path, source_in, duration, timeline_start, rate, model
         log = temp / 'transcription.log'
         progress('選んだクリップから音声を取り出しています…')
         try:
-            run_command([ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
-                '-threads', '1', '-ss', f'{source_in / rate:.9f}', '-i', asset_path,
-                '-t', f'{duration / rate:.9f}', '-map', '0:a:0', '-vn', '-ar', '16000', '-ac', '1',
-                '-c:a', 'pcm_s16le', audio], log, cancel)
+            command = [ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                       '-threads', '1']
+            for source in sources:
+                command += ['-ss', f'{source.source_seconds:.9f}', '-t', f'{source.duration_seconds:.9f}',
+                            '-i', source.path]
+            filters = []
+            labels = []
+            for index, source in enumerate(sources):
+                label = f'a{index}'
+                delay = max(0, round((source.timeline_seconds - timeline_start) * 1000))
+                filters.append(f'[{index}:a:0]asetpts=PTS-STARTPTS,adelay={delay}:all=1[{label}]')
+                labels.append(f'[{label}]')
+            filters.append(''.join(labels) + f'amix=inputs={len(labels)}:duration=longest:normalize=0[mix]')
+            command += ['-filter_complex', ';'.join(filters), '-map', '[mix]', '-t', f'{duration:.9f}',
+                        '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', audio]
+            run_command(command, log, cancel)
         except RuntimeError:
             details = log.read_text(encoding='utf-8', errors='replace').lower() if log.is_file() else ''
             if 'matches no streams' in details or 'does not contain any stream' in details:
@@ -130,8 +154,7 @@ def transcribe_clip(asset_path, source_in, duration, timeline_start, rate, model
         cues = parse_whisper_json(result_file)
         if not cues:
             raise ValueError('音声から文字を検出できませんでした。')
-        offset = timeline_start / rate
-        return [(offset + start, offset + end, text) for start, end, text in cues]
+        return [(timeline_start + start, timeline_start + end, text) for start, end, text in cues]
 
 
 def _json_time_seconds(value):

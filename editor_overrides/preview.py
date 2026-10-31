@@ -3,8 +3,8 @@ from collections import OrderedDict
 import math
 import copy
 import json
-from PySide6.QtCore import QElapsedTimer, QObject, QRectF, Qt, QTimer, QUrl, Signal, QSize
-from PySide6.QtGui import QColor, QImage, QImageReader, QPainter
+from PySide6.QtCore import QElapsedTimer, QObject, QPointF, QRectF, Qt, QTimer, QUrl, Signal, QSize
+from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPen, QBrush, QPolygonF
 from PySide6.QtMultimedia import QAudioBufferOutput, QAudioFormat, QAudioOutput, QMediaDevices, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from .model import Clip, Library
@@ -15,12 +15,55 @@ from .async_images import AsyncImages
 
 class Canvas(QWidget):
     clipClicked = Signal(str)
+    transformEdited = Signal(str, float, float, float, float, float, float)
 
     def __init__(self, preview):
         super().__init__(preview)
         self.preview = preview
         self.setMinimumSize(320, 180)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip('プレビューの素材をクリックして選択。中央をドラッグして移動、四隅・上下左右でサイズ変更、上のバーで回転します。Shiftを押しながらサイズ変更すると縦横比を個別に調整できます。')
+        self._gesture = None
+
+    def _mapping(self):
+        sequence = self.preview.sequence
+        ratio = min(self.width() / sequence.width, self.height() / sequence.height)
+        return ratio, (self.width() - sequence.width * ratio) / 2, (self.height() - sequence.height * ratio) / 2
+
+    def _geometry(self, clip):
+        sequence = self.preview.sequence
+        asset = self.preview.library.assets[clip.asset_id]
+        frame = self.preview.frame
+        source = clip.source_in + frame - clip.start
+        tx, ty, scale, opacity = self.preview.transforms.get(clip.id, clip.transform_at(source))
+        sx, sy, rotation = self.preview.extra_transforms.get(
+            clip.id, (clip.value_at('scale_x', source), clip.value_at('scale_y', source), clip.value_at('rotation', source)))
+        iw, ih = max(1, asset.width or sequence.width), max(1, asset.height or sequence.height)
+        factor = min(sequence.width / iw, sequence.height / ih) * scale
+        center = (sequence.width / 2 + tx, sequence.height / 2 + ty)
+        width, height = iw * factor * sx, ih * factor * sy
+        return center, width, height, rotation, (tx, ty, scale, opacity, sx, sy, rotation)
+
+    @staticmethod
+    def _rotate(x, y, angle):
+        radians = math.radians(angle)
+        return x * math.cos(radians) - y * math.sin(radians), x * math.sin(radians) + y * math.cos(radians)
+
+    def _widget_point(self, point):
+        ratio, ox, oy = self._mapping()
+        return QPointF(ox + point[0] * ratio, oy + point[1] * ratio)
+
+    def _handles(self, center, width, height, rotation):
+        points = {'nw':(-width/2,-height/2), 'n':(0,-height/2), 'ne':(width/2,-height/2),
+                  'e':(width/2,0), 'se':(width/2,height/2), 's':(0,height/2),
+                  'sw':(-width/2,height/2), 'w':(-width/2,0), 'move':(0,0)}
+        result = {name:self._widget_point((center[0]+self._rotate(x,y,rotation)[0], center[1]+self._rotate(x,y,rotation)[1]))
+                  for name,(x,y) in points.items()}
+        ratio, _, _ = self._mapping()
+        rx, ry = self._rotate(0, -30/max(ratio, .0001), rotation)
+        top = self._rotate(0, -height/2, rotation)
+        result['rotate'] = self._widget_point((center[0]+top[0]+rx, center[1]+top[1]+ry))
+        return result
 
     def videoSink(self):
         return self.preview.main_channel.video
@@ -30,12 +73,90 @@ class Canvas(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            selected = next((c for c in self.preview.sequence.active_clips(self.preview.frame)
+                             if c.id == getattr(self.preview, 'editing_clip_id', '')), None)
             clip = self.preview.clip_at(event.position())
+            if clip is None and selected and self.preview.library.assets[selected.asset_id].has_video:
+                handles=self._handles(*self._geometry(selected)[:4])
+                if any(math.hypot(event.position().x()-pt.x(),event.position().y()-pt.y())<=12
+                       for name,pt in handles.items() if name!='move'):
+                    clip=selected
             if clip is not None:
-                self.clipClicked.emit(clip.id)
-                event.accept()
-                return
+                if clip.id != getattr(self.preview, 'editing_clip_id', ''):
+                    self.preview.editing_clip_id = clip.id
+                    self.clipClicked.emit(clip.id)
+                center, width, height, rotation, values = self._geometry(clip)
+                handles = self._handles(center, width, height, rotation)
+                ratio, ox, oy = self._mapping()
+                pointer_doc=((event.position().x()-ox)/ratio,(event.position().y()-oy)/ratio)
+                local = self._to_local(pointer_doc, center, rotation)
+                mode = next((name for name, point in handles.items()
+                             if math.hypot(event.position().x()-point.x(), event.position().y()-point.y()) <= 12), None)
+                if mode is None and abs(local[0]) <= width/2 and abs(local[1]) <= height/2:
+                    mode = 'move'
+                if mode:
+                    self._gesture = {'clip':clip.id,'mode':mode,'values':values,'center':center,
+                        'start':((event.position().x()-ox)/ratio,(event.position().y()-oy)/ratio),
+                        'press_local':local,'size':(width,height)}
+                    self.setCursor(Qt.CursorShape.ClosedHandCursor if mode == 'move' else Qt.CursorShape.CrossCursor)
+                event.accept(); self.update(); return
+            self.preview.editing_clip_id = ''
+            self.update()
         super().mousePressEvent(event)
+
+    @staticmethod
+    def _to_local(point, center, rotation):
+        # Canvas coordinates have already been converted to sequence pixels by the caller.
+        return Canvas._rotate(point[0]-center[0], point[1]-center[1], -rotation)
+
+    def mouseMoveEvent(self, event):
+        if not self._gesture:
+            return super().mouseMoveEvent(event)
+        gesture = self._gesture
+        clip = next((c for c in self.preview.sequence.clips if c.id == gesture['clip']), None)
+        if clip is None:
+            return
+        ratio, ox, oy = self._mapping()
+        pointer = ((event.position().x()-ox)/ratio, (event.position().y()-oy)/ratio)
+        center, width, height = gesture['center'], *gesture['size']
+        tx, ty, scale, opacity, sx, sy, rotation = gesture['values']
+        mode = gesture['mode']
+        local = self._to_local(pointer, center, rotation)
+        if mode == 'move':
+            dx, dy = pointer[0]-gesture['start'][0], pointer[1]-gesture['start'][1]
+            tx += dx; ty += dy
+        elif mode == 'rotate':
+            a0 = math.degrees(math.atan2(gesture['press_local'][1], gesture['press_local'][0]))
+            a1 = math.degrees(math.atan2(local[1], local[0]))
+            rotation += a1-a0
+        elif mode in {'nw','n','ne','e','se','s','sw','w'}:
+            px, py = gesture['press_local']; x, y = local
+            sx_ratio = max(.05, abs(x)/(abs(px) or width/2))
+            sy_ratio = max(.05, abs(y)/(abs(py) or height/2))
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if shift:
+                if mode in ('e','w'): sx *= sx_ratio
+                elif mode in ('n','s'): sy *= sy_ratio
+                else: sx *= sx_ratio; sy *= sy_ratio
+            else:
+                factor = sx_ratio if mode in ('e','w') else sy_ratio if mode in ('n','s') else max(sx_ratio,sy_ratio)
+                sx *= factor; sy *= factor
+            sx, sy = min(10,max(.01,sx)), min(10,max(.01,sy))
+        self.preview.transforms[clip.id] = (tx,ty,scale,opacity)
+        self.preview.extra_transforms[clip.id] = (sx,sy,rotation)
+        self.update()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._gesture:
+            gesture=self._gesture; self._gesture=None
+            clip=next((c for c in self.preview.sequence.clips if c.id==gesture['clip']),None)
+            if clip:
+                values=self._geometry(clip)[4]
+                self.preview.transforms.pop(clip.id,None);self.preview.extra_transforms.pop(clip.id,None)
+                self.transformEdited.emit(clip.id,*values[:3],values[4],values[5],values[6])
+            self.unsetCursor();self.update();event.accept();return
+        super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -44,6 +165,21 @@ class Canvas(QWidget):
         ratio = min(self.width() / seq.width, self.height() / seq.height)
         width, height = max(1, round(seq.width * ratio)), max(1, round(seq.height * ratio))
         p.drawImage((self.width() - width) // 2, (self.height() - height) // 2, self.composite(width, height))
+        clip = next((c for c in self.preview.sequence.active_clips(self.preview.frame)
+                     if c.id == getattr(self.preview, 'editing_clip_id', '')), None)
+        if clip and self.preview.library.assets[clip.asset_id].has_video:
+            center, box_w, box_h, rotation, _ = self._geometry(clip)
+            handles = self._handles(center, box_w, box_h, rotation)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(QPen(QColor('#ffffff'),2));p.setBrush(Qt.BrushStyle.NoBrush)
+            corners=[handles[k] for k in ('nw','ne','se','sw')]
+            p.drawPolygon(QPolygonF(corners))
+            p.setPen(QPen(QColor('#118ca5'),2));p.setBrush(QBrush(QColor('#ffffff')))
+            for name,point in handles.items():
+                radius=6 if name=='rotate' else 5
+                p.drawEllipse(point,radius,radius)
+            top=handles['n'];rot=handles['rotate'];p.setPen(QPen(QColor('#118ca5'),2));p.drawLine(top,rot)
+            p.setPen(QPen(QColor('#118ca5'),3));p.drawLine(rot+QPointF(-8,0),rot+QPointF(8,0))
         if self.preview.notice:
             p.setPen(QColor('#cccccc'))
             p.drawText(self.rect().adjusted(15, 15, -15, -15), Qt.AlignmentFlag.AlignCenter, self.preview.notice)
@@ -229,6 +365,8 @@ class Preview(QWidget):
         self.frame, self.mode, self.source_id = 0, 'timeline', ''
         self.playing, self.notice, self.channels = False, '', {}
         self.transforms = {}
+        self.extra_transforms = {}
+        self.editing_clip_id = ''
         self.generated_images = AsyncImages(self)
         self.generated_images.changed.connect(self.generated_ready)
         self.generated_images.failed.connect(self.fail)
@@ -310,17 +448,20 @@ class Preview(QWidget):
             image_height = max(1, asset.height or sequence.height)
             tx, ty, scale, _opacity = self.transforms.get(
                 clip.id, clip.transform_at(clip.source_in + self.frame - clip.start))
+            source = clip.source_in + self.frame - clip.start
+            sx, sy, angle = self.extra_transforms.get(
+                clip.id, (clip.value_at('scale_x', source), clip.value_at('scale_y', source), clip.value_at('rotation', source)))
             factor = min(sequence.width / image_width, sequence.height / image_height) * scale
-            draw_width, draw_height = image_width * factor, image_height * factor
-            left = (sequence.width - draw_width) / 2 + tx
-            top = (sequence.height - draw_height) / 2 + ty
-            if not (left <= x <= left + draw_width and top <= y <= top + draw_height):
+            draw_width, draw_height = image_width * factor * sx, image_height * factor * sy
+            center = (sequence.width/2+tx, sequence.height/2+ty)
+            lx, ly = Canvas._to_local((x,y),center,angle)
+            if not (-draw_width/2 <= lx <= draw_width/2 and -draw_height/2 <= ly <= draw_height/2):
                 continue
             channel = self.channels.get(channel_key((), clip.track))
             image = channel.image if channel and channel.clip and channel.clip.id == clip.id else None
             if image is not None and not image.isNull() and asset.kind != 'compound':
-                px = min(image.width() - 1, max(0, int((x - left) / max(1, draw_width) * image.width())))
-                py = min(image.height() - 1, max(0, int((y - top) / max(1, draw_height) * image.height())))
+                px = min(image.width() - 1, max(0, int((lx + draw_width/2) / max(1, draw_width) * image.width())))
+                py = min(image.height() - 1, max(0, int((ly + draw_height/2) / max(1, draw_height) * image.height())))
                 if image.pixelColor(px, py).alpha() <= 8:
                     continue
             return clip
@@ -339,6 +480,8 @@ class Preview(QWidget):
             channel.deleteLater()
         self.channels.clear()
         self.transforms.clear()
+        self.extra_transforms.clear()
+        self.editing_clip_id = ''
         self.effect_images.clear()
         self.generated_images.clear()
         self.library, self.source_id = library, ''
@@ -444,9 +587,14 @@ class Preview(QWidget):
         def draw_image(p, image, clip, sequence, frame):
             tx, ty, scale, opacity = self.transforms.get(clip.id, clip.transform_at(clip.source_in+frame-clip.start))
             factor = min(width/image.width(), height/image.height())*scale
-            w, h = image.width()*factor, image.height()*factor
+            source = clip.source_in+frame-clip.start
+            sx, sy, angle = self.extra_transforms.get(
+                clip.id, (clip.value_at('scale_x',source), clip.value_at('scale_y',source), clip.value_at('rotation',source)))
+            w, h = image.width()*factor*sx, image.height()*factor*sy
+            cx, cy = width/2+tx*width/sequence.width, height/2+ty*height/sequence.height
+            p.save();p.translate(cx,cy);p.rotate(angle)
             p.setOpacity(opacity)
-            p.drawImage(QRectF((width-w)/2+tx*width/sequence.width, (height-h)/2+ty*height/sequence.height, w, h), image)
+            p.drawImage(QRectF(-w/2,-h/2,w,h), image);p.restore()
         if self.mode == 'source':
             asset = self.library.assets.get(self.source_id)
             if asset and asset.kind == 'compound':

@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from .audio_tools import audio_role, role_paths
 from .jobs import Jobs
 from .subtitle_library import add_entries, save_generated
-from .transcription import MODELS, split_timed_cues, transcribe_clip
+from .transcription import MODELS, split_timed_cues, transcribe_sources
+from .audio_targets import audio_sources
 
 VIDEO_EXTENSIONS = {'.mp4', '.mov', '.mkv', '.avi', '.m4v', '.mts', '.m2ts', '.webm'}
 
@@ -31,31 +32,33 @@ class TranscriptionDialog(QDialog):
         self.setWindowTitle('自動文字起こし・仮テロップ')
         self.resize(900, 680)
         layout = QVBoxLayout(self)
-        layout.addWidget(note('タイムライン上の動画・音声クリップを選べます。動画クリップは中の音声を自動で取り出して文字起こしします。最初は自分の声（役割が未設定の場合は先頭のクリップ）を選びます。音声とAI処理はこのPC内で行い、初回は選んだモデルをダウンロードします。'))
+        layout.addWidget(note('タイムライン上の動画・音声・複合クリップを選べます。複合クリップは中の音声を時間位置に合わせてまとめて文字起こしします。最初は自分の声（役割が未設定の場合は先頭のクリップ）を選びます。音声とAI処理はこのPC内で行い、初回は選んだモデルをダウンロードします。'))
         form = QFormLayout()
         self.audio = QComboBox()
         self.clips = {}
+        self.sources = {}
         paths = role_paths(self.project)
         choices = []
         for clip in editor.sequence.ordered():
             asset = editor.library.assets[clip.asset_id]
-            # Importers can report stale audio/video flags. The source file is
-            # inspected when FFmpeg extracts the selected clip's audio.
-            if asset.kind != 'media':
+            leaves = audio_sources(editor.library, editor.sequence, clip_ids={clip.id})
+            if asset.kind not in ('media', 'compound') or not leaves:
                 continue
-            role = audio_role(asset, paths)
-            media_type = '動画クリップ' if asset.has_video or asset.path.lower().endswith(tuple(VIDEO_EXTENSIONS)) else '音声クリップ'
+            role = audio_role(asset, paths) if asset.kind == 'media' else 'compound'
+            media_type = ('複合クリップ（内部の音声をまとめて解析）' if asset.kind == 'compound' else
+                '動画クリップ' if asset.has_video or asset.path.lower().endswith(tuple(VIDEO_EXTENSIONS)) else '音声クリップ')
             label = f'{asset.name} ・ {clip.start / float(editor.sequence.rate):.1f}秒〜 ・ {media_type} ・ {"マイク" if role == "voice" else "音声"}'
-            choices.append((label, clip, role))
-        choices.sort(key=lambda item: (item[2] != 'voice', item[1].start, item[0].casefold()))
-        for label, clip, _role in choices:
+            choices.append((label, clip, role, leaves))
+        choices.sort(key=lambda item: (item[2] not in ('voice', 'compound'), item[1].start, item[0].casefold()))
+        for label, clip, _role, leaves in choices:
             self.audio.addItem(label, clip.id)
             self.clips[clip.id] = clip
+            self.sources[clip.id] = leaves
         selected = editor.selected_clip()
         if selected and self.audio.findData(selected.id) >= 0:
             self.audio.setCurrentIndex(self.audio.findData(selected.id))
         if not choices:
-            self.audio.addItem('タイムラインに動画・音声クリップがありません')
+            self.audio.addItem('タイムラインに音声付きの動画・音声・複合クリップがありません')
         form.addRow('文字起こしするクリップ', self.audio)
         self.model = QComboBox()
         for key, definition in MODELS.items():
@@ -109,13 +112,12 @@ class TranscriptionDialog(QDialog):
     def start_transcription(self):
         clip_id = self.audio.currentData()
         if not clip_id or clip_id not in self.clips:
-            self.status.setText('文字起こしする動画または音声クリップをタイムラインに配置してください。')
+            self.status.setText('文字起こしする動画・音声・複合クリップをタイムラインに配置してください。')
             return
         if self.editor.shell.desk.busy:
             self.status.setText('収録や素材の処理が終わってから実行してください。')
             return
         clip = self.clips[clip_id]
-        asset = self.editor.library.assets[clip.asset_id]
         model, language = self.model.currentData(), self.language.currentData()
         self.editor.preview.pause()
         self.revision = self.editor.revision
@@ -130,9 +132,12 @@ class TranscriptionDialog(QDialog):
         self.start_button.clicked.connect(self.cancel_job)
         self.status.setText('文字起こしを準備しています…')
         try:
-            self.jobs.submit('transcription', lambda cancel: transcribe_clip(
-                asset.path, clip.source_in, clip.duration, clip.start,
-                float(self.editor.sequence.rate), model, language, cancel, self.jobs.progress.emit))
+            rate = float(self.editor.sequence.rate)
+            timeline_start = clip.start / rate
+            duration = clip.duration / rate
+            sources = list(self.sources.get(clip.id, []))
+            self.jobs.submit('transcription', lambda cancel: transcribe_sources(
+                sources, timeline_start, duration, model, language, cancel, self.jobs.progress.emit))
         except Exception as exc:
             self._set_inputs(True)
             self.start_button.setText('文字起こしを開始')
