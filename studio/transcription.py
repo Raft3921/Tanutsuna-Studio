@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -13,7 +14,6 @@ from PySide6.QtCore import QStandardPaths
 
 from .audio_tools import ffmpeg_executable
 from .jobs import run_command
-from .subtitle_library import parse_srt
 
 
 MODELS = {
@@ -122,16 +122,74 @@ def transcribe_clip(asset_path, source_in, duration, timeline_start, rate, model
         threads = min(4, max(1, (os.cpu_count() or 2) - 1))
         progress('音声をローカルで解析しています…')
         run_command([engine, '-m', model_file, '-f', audio, '-l', language,
-            '-t', str(threads), '-bs', '5', '-bo', '5', '-osrt', '-of', prefix, '-ng'],
+            '-t', str(threads), '-bs', '5', '-bo', '5', '-ojf', '-of', prefix, '-ng'],
             log, cancel, cwd=engine.parent)
-        srt = prefix.with_suffix('.srt')
-        if not srt.is_file():
+        result_file = prefix.with_suffix('.json')
+        if not result_file.is_file():
             raise ValueError('文字起こし結果を作成できませんでした。')
-        cues = parse_srt(srt)
+        cues = parse_whisper_json(result_file)
         if not cues:
             raise ValueError('音声から文字を検出できませんでした。')
         offset = timeline_start / rate
         return [(offset + start, offset + end, text) for start, end, text in cues]
+
+
+def _json_time_seconds(value):
+    if isinstance(value, (int, float)):
+        return float(value) / 1000
+    if isinstance(value, str):
+        match = re.fullmatch(r'(\d+):(\d{2}):(\d{2})[,.](\d+)', value.strip())
+        if match:
+            hours, minutes, seconds, millis = match.groups()
+            return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + float('0.' + millis)
+    return None
+
+
+def parse_whisper_json(path):
+    """Read timed Whisper tokens, falling back to segment timing when needed."""
+    with Path(path).open(encoding='utf-8') as source:
+        document = json.load(source)
+    result = []
+    for segment in document.get('transcription', []):
+        segment_times = segment.get('timestamps') or {}
+        segment_offsets = segment.get('offsets') or {}
+        segment_start = _json_time_seconds(segment_offsets.get('from'))
+        segment_end = _json_time_seconds(segment_offsets.get('to'))
+        if segment_start is None:
+            segment_start = _json_time_seconds(segment_times.get('from'))
+        if segment_end is None:
+            segment_end = _json_time_seconds(segment_times.get('to'))
+        text = str(segment.get('text') or '')
+        tokens = [token for token in (segment.get('tokens') or [])
+                  if str(token.get('text') or '').strip() and not str(token.get('text', '')).startswith('<|')]
+        if not tokens:
+            if segment_start is not None and segment_end is not None and segment_end > segment_start and text.strip():
+                result.append((segment_start, segment_end, text))
+            continue
+        fallback_start = segment_start if segment_start is not None else 0.0
+        fallback_end = segment_end if segment_end is not None and segment_end > fallback_start else fallback_start + .01
+        weights = [max(1, len(_graphemes(str(token.get('text') or '')))) for token in tokens]
+        total = sum(weights)
+        cursor = fallback_start
+        consumed = 0
+        for token, weight in zip(tokens, weights):
+            timestamps = token.get('timestamps') or {}
+            offsets = token.get('offsets') or {}
+            start = _json_time_seconds(offsets.get('from'))
+            end = _json_time_seconds(offsets.get('to'))
+            if start is None:
+                start = _json_time_seconds(timestamps.get('from'))
+            if end is None:
+                end = _json_time_seconds(timestamps.get('to'))
+            if start is None or end is None or end <= start:
+                start = cursor
+                end = fallback_start + (fallback_end - fallback_start) * ((consumed + weight) / total)
+            start = min(max(fallback_start, start), max(fallback_start, fallback_end - .01))
+            end = min(fallback_end, max(start + .01, end))
+            result.append((start, end, str(token.get('text') or '')))
+            cursor = end
+            consumed += weight
+    return result
 
 
 def _graphemes(text):
@@ -183,16 +241,76 @@ def format_caption(text, max_chars=20, max_words=8, line_break=True, chars_per_l
 
 
 def split_timed_cues(cues, max_chars, max_words, line_break, chars_per_line, rate):
-    result = []
+    max_chars = max(1, int(max_chars))
+    max_words = max(0, int(max_words))
+    tokens = []
     for start, end, text in cues:
-        parts = format_caption(text, max_chars, max_words, line_break, chars_per_line)
-        weights = [max(1, len(_graphemes(part.replace('\n', '').replace(' ', '')))) for part in parts]
+        text = re.sub(r'\s+', ' ', str(text))
+        if not text.strip() or end <= start:
+            continue
+        clusters = _graphemes(text)
+        if len(clusters) <= max_chars:
+            tokens.append((float(start), float(end), text))
+            continue
+        weights = [1] * len(clusters)
         total = sum(weights)
-        cursor = start
-        for index, (part, weight) in enumerate(zip(parts, weights)):
-            stop = end if index == len(parts) - 1 else start + (end-start) * sum(weights[:index+1]) / total
-            if stop - cursor < 1 / rate and index < len(parts)-1:
+        cursor = float(start)
+        for index in range(0, len(clusters), max_chars):
+            part = ''.join(clusters[index:index + max_chars])
+            if not part.strip():
                 continue
-            result.append((cursor, stop, part))
+            through = sum(weights[:index + max_chars])
+            stop = float(end) if index + max_chars >= len(clusters) else float(start) + (float(end) - float(start)) * through / total
+            tokens.append((cursor, max(cursor + 1 / max(1, rate), stop), part))
             cursor = stop
+
+    result, group = [], []
+
+    def flush():
+        if not group:
+            return
+        text = ''.join(item[2] for item in group).strip()
+        if line_break and text:
+            text = _wrap_caption(text, max(1, int(chars_per_line)))
+        if text:
+            result.append((group[0][0], group[-1][1], text))
+        group.clear()
+
+    for token in tokens:
+        start, end, text = token
+        if group and start - group[-1][1] > max(.24, 6 / max(1, rate)):
+            flush()
+        candidate = ''.join(item[2] for item in group) + text
+        spaced_language = bool(re.search(r'\s', candidate.strip()))
+        char_count = len(_graphemes(candidate.strip()))
+        if spaced_language:
+            word_count = len(re.findall(r'\S+', candidate))
+        else:
+            # Whisper's timed token boundaries are the best available word
+            # units for languages such as Japanese that do not use spaces.
+            word_count = sum(1 for item in group if item[2].strip()) + (1 if text.strip() else 0)
+        if group and (char_count > max_chars or (max_words and word_count > max_words)):
+            flush()
+        group.append(token)
+        if re.search(r'[。！？.!?…][」』）)]*$', text.strip()):
+            flush()
+    flush()
     return result
+
+
+def _wrap_caption(text, width):
+    if len(_graphemes(text)) <= width:
+        return text
+    spaced = bool(re.search(r'\s', text))
+    parts = re.findall(r'\S+\s*', text) if spaced else _graphemes(text)
+    lines, line = [], ''
+    for part in parts:
+        candidate = line + part
+        if line and len(_graphemes(candidate.strip())) > width:
+            lines.append(line.strip())
+            line = part.lstrip()
+        else:
+            line = candidate
+    if line.strip():
+        lines.append(line.strip())
+    return '\n'.join(lines)

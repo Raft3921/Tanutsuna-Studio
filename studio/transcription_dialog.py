@@ -27,6 +27,7 @@ class TranscriptionDialog(QDialog):
         self.project = editor.shell.desk.selected_project()
         self.revision = None
         self.cues = []
+        self.raw_cues = []
         self.setWindowTitle('自動文字起こし・仮テロップ')
         self.resize(900, 680)
         layout = QVBoxLayout(self)
@@ -67,13 +68,13 @@ class TranscriptionDialog(QDialog):
         self.max_chars = QSpinBox(); self.max_chars.setRange(4, 80); self.max_chars.setValue(20); self.max_chars.setSuffix(' 文字')
         form.addRow('1枚の最大文字数', self.max_chars)
         self.max_words = QSpinBox(); self.max_words.setRange(0, 40); self.max_words.setValue(8); self.max_words.setSpecialValueText('制限なし')
-        form.addRow('最大単語数（空白区切りの言語）', self.max_words)
+        form.addRow('最大単語数（日本語などはAIの認識単位）', self.max_words)
         self.line_break = QCheckBox('長い文に自動で改行を入れる'); self.line_break.setChecked(True)
         form.addRow('改行', self.line_break)
         self.line_chars = QSpinBox(); self.line_chars.setRange(4, 40); self.line_chars.setValue(12); self.line_chars.setSuffix(' 文字／行')
         form.addRow('1行の文字数', self.line_chars)
         layout.addLayout(form)
-        layout.addWidget(note('文字数で区切った場合の各字幕の時間は、AIが検出した発話区間を文字量に応じて分けます。内容とタイミングを確認してから追加してください。'))
+        layout.addWidget(note('字幕はAIが検出した単語・認識単位ごとの時刻に合わせます。無音をまたいで字幕を表示しません。開始・終了の秒数は表で直接修正できます。設定を変えた後は「区切りを再適用」を押してください。'))
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(['開始（秒）', '終了（秒）', '仮テロップ（編集できます）'])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -81,14 +82,18 @@ class TranscriptionDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.itemSelectionChanged.connect(self.update_review_button)
         layout.addWidget(self.table, 1)
         row = QHBoxLayout()
         self.select_all = QPushButton('全て選択'); self.select_all.clicked.connect(self.table.selectAll)
         self.clear_selection = QPushButton('選択解除'); self.clear_selection.clicked.connect(self.table.clearSelection)
+        self.rebuild_button = QPushButton('区切りを再適用'); self.rebuild_button.clicked.connect(self.reapply_settings); self.rebuild_button.setEnabled(False)
+        self.preview_cue_button = QPushButton('選択字幕の開始位置を確認'); self.preview_cue_button.clicked.connect(self.preview_selected_cue); self.preview_cue_button.setEnabled(False)
         self.start_button = QPushButton('文字起こしを開始'); self.start_button.setObjectName('Primary'); self.start_button.clicked.connect(self.start_transcription)
         self.add_button = QPushButton('選択した仮テロップを追加'); self.add_button.clicked.connect(self.add_selected)
         self.add_button.setEnabled(False)
-        for button in (self.select_all, self.clear_selection, self.start_button, self.add_button):
+        for button in (self.select_all, self.clear_selection, self.rebuild_button,
+                       self.preview_cue_button, self.start_button, self.add_button):
             row.addWidget(button)
         layout.addLayout(row)
         self.status = note('字幕を追加すると、字幕ライブラリにもSRT形式で保存します。追加後はタイムライン上で全字幕が選択され、デザインをまとめて変更できます。')
@@ -115,8 +120,10 @@ class TranscriptionDialog(QDialog):
         self.editor.preview.pause()
         self.revision = self.editor.revision
         self.cues = []
+        self.raw_cues = []
         self.table.setRowCount(0)
         self.add_button.setEnabled(False)
+        self.rebuild_button.setEnabled(False)
         self._set_inputs(False)
         self.start_button.setText('中止')
         self.start_button.clicked.disconnect()
@@ -152,19 +159,40 @@ class TranscriptionDialog(QDialog):
         if self.editor.revision != self.revision:
             self.status.setText('解析中に編集が変更されました。字幕を追加する前に、もう一度文字起こししてください。')
             return
-        self.cues = split_timed_cues(result, self.max_chars.value(), self.max_words.value(),
+        self.raw_cues = result
+        self.rebuild_button.setEnabled(bool(self.raw_cues))
+        self.reapply_settings()
+        self.status.setText(f'{len(self.cues)}個の仮テロップを作成しました。文章と開始・終了時刻を確認・修正してから追加できます。')
+
+    def reapply_settings(self):
+        if not self.raw_cues:
+            return
+        self.cues = split_timed_cues(self.raw_cues, self.max_chars.value(), self.max_words.value(),
             self.line_break.isChecked(), self.line_chars.value(), float(self.editor.sequence.rate))
         self.table.setRowCount(len(self.cues))
         for row, (start, end, text) in enumerate(self.cues):
-            for column, value in enumerate((f'{start:.2f}', f'{end:.2f}', text)):
+            for column, value in enumerate((f'{start:.3f}', f'{end:.3f}', text)):
                 item = QTableWidgetItem(value)
-                if column < 2:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if column < 2:item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(row, column, item)
         self.table.selectAll()
         self.add_button.setEnabled(bool(self.cues))
-        self.status.setText(f'{len(self.cues)}個の仮テロップを作成しました。文章を確認し、必要なら編集してから追加してください。')
+        self.update_review_button()
+        self.status.setText(f'設定を反映し、{len(self.cues)}個に区切りました。再適用すると、この表で行った文字・時刻の直接編集は置き換わります。')
+
+    def preview_selected_cue(self):
+        rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()})
+        if not rows:return
+        try:start = float(self.table.item(rows[0], 0).text())
+        except (ValueError, AttributeError):
+            self.status.setText('選択行の開始時刻を秒数で入力してください。');return
+        frame = max(0, round(start * float(self.editor.sequence.rate)))
+        self.editor.preview.pause();self.editor.preview.seek(frame, 'timeline')
+        self.editor.statusBar().showMessage(f'字幕の開始位置 {start:.3f} 秒をプレビューで確認中', 4000)
+
+    def update_review_button(self):
+        if hasattr(self, 'preview_cue_button'):
+            self.preview_cue_button.setEnabled(bool(self.table.selectionModel().selectedRows()))
 
     def add_selected(self):
         rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()})
@@ -192,7 +220,8 @@ class TranscriptionDialog(QDialog):
 
     def _set_inputs(self, enabled):
         for widget in (self.audio, self.model, self.language, self.max_chars, self.max_words,
-                       self.line_break, self.line_chars, self.select_all, self.clear_selection):
+                       self.line_break, self.line_chars, self.select_all, self.clear_selection,
+                       self.rebuild_button):
             widget.setEnabled(enabled)
 
     def done(self, result):
