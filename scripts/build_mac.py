@@ -30,6 +30,7 @@ def restore_webengine_framework_layout(bundle):
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / 'studio/version.py').read_text(encoding='utf-8').split('STUDIO_VERSION = "', 1)[1].split('"', 1)[0]
+NUMPY_VERSION = '2.5.4'
 
 def build():
     if sys.platform != 'darwin':
@@ -44,6 +45,12 @@ def build():
     subprocess.run(['swiftc','-parse-as-library','-O','-target','arm64-apple-macos15.0',str(native/'LiveWindow.swift'),'-o',str(native/'live-window'),'-framework','ScreenCaptureKit','-framework','CoreMedia','-framework','CoreVideo','-framework','AppKit','-Xlinker','-sectcreate','-Xlinker','__TEXT','-Xlinker','__info_plist','-Xlinker',str(native/'RecorderInfo.plist')],check=True)
     if not (ROOT/'build/live-deps/av').is_dir():
         subprocess.run([sys.executable,'-m','pip','install','--target',str(ROOT/'build/live-deps'),'av==17.1.0'],check=True)
+    try:
+        import numpy
+        if numpy.__version__ != NUMPY_VERSION:
+            raise ImportError(f'NumPy {NUMPY_VERSION} が必要です')
+    except ImportError:
+        subprocess.run([sys.executable,'-m','pip','install',f'numpy=={NUMPY_VERSION}'],check=True)
     if not (app / 'cutraft/app.py').is_file():
         raise SystemExit('先に scripts/build_native.py --prepare-only を実行してください。')
     # Reapply the maintained fixes without copying the Windows runtime.
@@ -52,7 +59,7 @@ def build():
         shutil.copy2(source, app / 'cutraft' / source.name)
     args = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--windowed', '--onedir',
         '--name', 'Tanutsuna Studio', '--osx-bundle-identifier', 'com.tanutsuna.studio',
-        '--paths', str(app), '--paths',str(ROOT/'build/live-deps'),'--collect-all','av','--collect-all', 'imageio_ffmpeg',
+        '--paths', str(app), '--paths',str(ROOT/'build/live-deps'),'--collect-all','av','--collect-all','numpy','--collect-all', 'imageio_ffmpeg',
         '--icon', str(app / 'cutraft/resources/icons/cutraft.icns'),
         '--add-data', str(app / 'cutraft/resources') + ':cutraft/resources',
         '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build/mac'),
