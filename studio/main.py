@@ -441,6 +441,20 @@ from .takes import takes_for
 
 
 def main():
+    if sys.platform == 'darwin' and getattr(sys, 'frozen', False):
+        # PyInstaller nests Qt frameworks under PySide6/Qt/lib, while QtWebEngine
+        # searches Contents/Frameworks/QtWebEngineCore.framework by default.
+        # Point it to the bundled helper explicitly to avoid qFatal on first use.
+        contents = Path(sys.executable).resolve().parents[1]
+        helper = (contents / 'Frameworks/PySide6/Qt/lib/QtWebEngineCore.framework'
+            / 'Helpers/QtWebEngineProcess.app/Contents/MacOS/QtWebEngineProcess')
+        if helper.is_file():
+            os.environ['QTWEBENGINEPROCESS_PATH'] = str(helper)
+        resources = (contents / 'Frameworks/PySide6/Qt/lib/QtWebEngineCore.framework'
+            / 'Resources')
+        if resources.is_dir():
+            # Qt's frozen-app lookup misses the nested PySide6 framework bundle.
+            os.environ['QTWEBENGINE_RESOURCES_PATH'] = str(resources)
     from .avatar_gl import configure_opengl
     configure_opengl()
     # TrackingDialog imports QtWebEngineWidgets only when camera tracking is
@@ -448,6 +462,10 @@ def main():
     # import cannot reach QWebEnginePage with an uninitialized global context.
     from PySide6.QtWebEngineQuick import QtWebEngineQuick
     QtWebEngineQuick.initialize()
+    # The Widgets binding also needs to be loaded before QApplication. Keeping
+    # this import eager prevents its first-use initialization from running in
+    # response to the live/record button after the GUI is already active.
+    from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
     app=QApplication(sys.argv)
     app.setApplicationName('Tanutsuna Studio');app.setOrganizationName('TanutsunaStudio')
     splash_image=QPixmap(520,180);splash_image.fill(QColor('#171b24'))
