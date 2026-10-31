@@ -30,6 +30,10 @@ class VtuberPanel(QWidget):
         self.server=TrackerServer()
         try:self.server.state.voice_gain=min(5,max(.5,float(QSettings('TanutsunaStudio','Avatar').value('voiceMouthGain',2.5))))
         except (TypeError,ValueError):pass
+        # Cache the persisted value: reading QSettings on every 30 Hz render
+        # tick caused needless disk/settings backend work during capture.
+        self._saved_voice_gain=self.server.state.voice_gain
+        self._last_status=''
         self.mouth_shapes=dict(DEFAULT_SHAPES)
         try:
             stored=json.loads(QSettings('TanutsunaStudio','Avatar').value('mouthShapes','{}'))
@@ -207,10 +211,9 @@ class VtuberPanel(QWidget):
             self._last_microphone_label=microphone_label
             QSettings('TanutsunaStudio','Avatar').setValue('microphoneLabel',microphone_label)
         voice_gain=self.server.state.voice_gain
-        try:stored_voice_gain=float(QSettings('TanutsunaStudio','Avatar').value('voiceMouthGain',2.5))
-        except (TypeError,ValueError):stored_voice_gain=2.5
-        if abs(stored_voice_gain-voice_gain)>.04:
+        if abs(self._saved_voice_gain-voice_gain)>.04:
             QSettings('TanutsunaStudio','Avatar').setValue('voiceMouthGain',voice_gain)
+            self._saved_voice_gain=voice_gain
         now=time.monotonic();dt=now-self.last;self.last=now;t=now-self.epoch
         mode=self.mode.currentIndex();detected=False
         if mode==2:
@@ -220,14 +223,17 @@ class VtuberPanel(QWidget):
                 'pitch':max(-40,min(40,(raw.pitch-self.neutral[1])*gain)),'roll':max(-40,min(40,(raw.roll-self.neutral[2])*gain)),
                 'headX':max(-.65,min(.65,raw.headX*move)),'headY':max(-.45,min(.45,raw.headY*move)),
                 'headZ':max(-.55,min(.55,raw.headZ*move)), 'jawOpen':min(1,max(0,raw.jawOpen)*self.mouth_gain.value())}) if detected else Pose(jawOpen=0)
-            self.status.setText(('カメラ追跡中' if detected else '追跡信号なし・待機姿勢')+f'  左右 {self.pose.yaw:.0f}° / 上下 {self.pose.pitch:.0f}° / 傾き {self.pose.roll:.0f}°')
+            status=('カメラ追跡中' if detected else '追跡信号なし・待機姿勢')+f'  左右 {self.pose.yaw:.0f}° / 上下 {self.pose.pitch:.0f}° / 傾き {self.pose.roll:.0f}°'
+            if status!=self._last_status:self.status.setText(status);self._last_status=status
         elif mode==1:
             target=Pose(yaw=math.sin(t*.8)*32,pitch=math.sin(t*1.1)*16,roll=math.sin(t*.6)*12,
                 jawOpen=(math.sin(t*3)+1)*.45,headX=math.sin(t*.9)*.16,headY=math.sin(t*1.3)*.07)
-            self.status.setText('可動テスト（自動アニメーション）。カメラ追跡の結果ではありません。')
+            status='可動テスト（自動アニメーション）。カメラ追跡の結果ではありません。'
+            if status!=self._last_status:self.status.setText(status);self._last_status=status
         else:
             target=Pose(**{k:s.value()/(1 if k in ('yaw','pitch','roll') else 100) for k,s in self.sliders.items()})
-            self.status.setText('手動の可動確認。モデルを回して背面や横顔も確認できます。')
+            status='手動の可動確認。モデルを回して背面や横顔も確認できます。'
+            if status!=self._last_status:self.status.setText(status);self._last_status=status
         if mode != 2:
             vowel=VOWELS[int(t/1.3)%5] if mode == 1 else VOWELS[self.vowel.currentIndex()]
             setattr(target,'mouth'+vowel,1)

@@ -209,7 +209,10 @@ class RecordingPanel(QWidget):
     def capture_failed(self, message):
         self.end_motion(); self.resume_editor()
         self.folder, self.take = self.recorder.folder, self.recorder.take
-        self.message(message); self.refresh(); self.update_buttons()
+        if message=='収録の準備・終了処理がタイムアウトしました。収録済みの元データは保持します。':
+            self.message('収録の終了処理が時間内に完了しませんでした。元データは保持しています。「未完了の整理・映像化を再開」から続けられます。')
+        else:self.message(message)
+        self.refresh(); self.update_buttons()
 
     def capture_stopped(self, folder, take):
         self.end_motion()

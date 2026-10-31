@@ -194,7 +194,13 @@ class Recorder(QObject):
     def stop(self):
         if self.state != 'recording': return
         self.take['duration'] = max(.02, time.perf_counter() - self.epoch)
-        self.set_state('stopping'); self.timeout.start(30000)
+        self.set_state('stopping')
+        # High resolution hardware encoders can take considerably longer than
+        # 30 seconds to finalize a long file, particularly while face tracking
+        # is sharing CPU/GPU resources. Keep the original capture intact and
+        # allow a duration-scaled finalization window before declaring failure.
+        finalize_timeout=max(120000,min(600000,120000+int(self.take['duration']*250)))
+        self.timeout.start(finalize_timeout)
         if self.process and self.process.state() == QProcess.ProcessState.Running:
             self.process.write(b'stop\n'); self.process.closeWriteChannel()
         if sys.platform == 'win32':
@@ -242,7 +248,8 @@ class Recorder(QObject):
         if self.encoder: self.encoder.stop()
         if self.capture: self.capture.setActive(False)
         if self.take and self.folder.is_dir():
-            self.take['state'] = 'incomplete'; self.take['warnings'].append(message)
+            self.take['state'] = 'incomplete'
+            if message not in self.take['warnings']:self.take['warnings'].append(message)
             write_take(self.folder, self.take)
         self.release_video(); self.failed.emit(message)
         QTimer.singleShot(0,self.cleanup_pending)

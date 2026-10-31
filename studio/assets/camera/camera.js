@@ -4,6 +4,11 @@ let preferredLabel=new URLSearchParams(location.hash.slice(1)).get('camera')||''
 let preferredMicrophone=new URLSearchParams(location.hash.slice(1)).get('microphone')||'';
 let detector, stream, audioContext, audioAnalyser, audioSamples, running=false, audioReady=false, audioNoise=.002, audioMouth=0;
 let generation=0, baseline=null, busy=false, lastVideo=-1, noiseHistory=[];
+// CPU face inference competes with capture and editing on Windows laptops.
+// Fifteen inference frames per second at 320x240 reduces that load while
+// keeping head and mouth tracking responsive.
+const windowsTracking=/Windows/i.test(navigator.userAgent);
+const trackingInterval=windowsTracking?66:50;
 const sensitivity=$('speech-sensitivity'),queryGain=Number(new URLSearchParams(location.hash.slice(1)).get('voiceGain'));
 if(sensitivity){const saved=localStorage.getItem('speech-sensitivity');if(Number.isFinite(queryGain)&&queryGain>0)sensitivity.value=String(Math.max(.5,Math.min(5,queryGain)));else if(saved)sensitivity.value=saved;}
 function showSensitivity(){ $('speech-sensitivity-value').value=Number(sensitivity.value).toFixed(1);localStorage.setItem('speech-sensitivity',sensitivity.value); }
@@ -89,7 +94,7 @@ async function tick(version) {
       await send(detected,pose||{},detected?'カメラ追跡中':'顔を探しています');
     }catch(error){await stop(error.message||String(error));return;}finally{busy=false;}
   }
-  setTimeout(()=>tick(version),50);
+  setTimeout(()=>tick(version),trackingInterval);
 }
 function cameraKey(label){return label.toLowerCase().replaceAll('カメラ','camera').replaceAll('の','').replace(/\(built.in\)|（内蔵）|[\s\p{P}\p{Cf}]/gu,'');}
 function describeCameraError(error){
@@ -155,7 +160,7 @@ $('start').onclick=async()=>{
     }
     if(preferredLabel && !$('camera-device').value)throw new Error('選択したカメラが見つかりません。接続を確認するかカメラ一覧で選び直してください。');
     const selected=$('camera-device').value,selectedMicrophone=$('microphone-device').value;
-    const video={...(selected?{deviceId:{exact:selected}}:{}),width:{ideal:480},height:{ideal:360},frameRate:{ideal:30,max:30}};
+    const video={...(selected?{deviceId:{exact:selected}}:{}),width:{ideal:windowsTracking?320:480},height:{ideal:windowsTracking?240:360},frameRate:{ideal:windowsTracking?20:30,max:windowsTracking?20:30}};
     let candidate;
     try{
       candidate=await navigator.mediaDevices.getUserMedia({video,audio:{...(selectedMicrophone?{deviceId:{exact:selectedMicrophone}}:{}),channelCount:1,echoCancellation:false,noiseSuppression:true,autoGainControl:true}});
