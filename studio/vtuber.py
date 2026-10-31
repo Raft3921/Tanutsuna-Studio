@@ -39,7 +39,7 @@ class VtuberPanel(QWidget):
                     self.mouth_shapes[vowel]=(max(.55,min(1.9,width)),max(.15,min(1.3,height)))
         except (ValueError,TypeError):pass
         self.pose=Pose();self.neutral=[0,0,0];self.last=time.monotonic();self.epoch=self.last
-        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.tracking_dialog=None
+        self._last_camera_label='';self._last_microphone_label='';self.recording=None;self.record_path=None;self.record_start=0;self.output=None;self.tracking_view=None
         self.setMinimumHeight(420)
         outer=QVBoxLayout(self)
         controls=QHBoxLayout()
@@ -136,8 +136,9 @@ class VtuberPanel(QWidget):
 
     def start_tracking(self,checked=False,automatic=False):
         try:
-            if self.tracking_dialog and self.tracking_dialog.isVisible():
-                self.tracking_dialog.raise_();self.tracking_dialog.activateWindow();return True
+            if self.server.server is not None:
+                self.status.setText('カメラ追跡はアプリ内で動作中です。別ウィンドウは開きません。')
+                return True
             assets=Path(__file__).parent/'assets/tracker'
             if not (assets/'face_landmarker.task').is_file():raise ValueError('追跡モデルがありません。配布ZIPをすべて展開してください。')
             self.server.state.camera_label='';self.server.state.microphone_label='';self._last_camera_label='';self._last_microphone_label=''
@@ -146,12 +147,13 @@ class VtuberPanel(QWidget):
             self.neutral=[0,0,0]
             from urllib.parse import quote
             url+='&autostart=1&camera='+quote(self.camera_choice.currentData() or '',safe='')
-            from .tracking_view import TrackingDialog
-            self.tracking_dialog=TrackingDialog(self,url)
-            self.tracking_dialog.finished.connect(self.tracking_dialog_finished)
-            self.tracking_dialog.show();self.tracking_dialog.raise_();self.tracking_dialog.activateWindow()
+            from .tracking_view import TrackingView
+            if self.tracking_view is None:
+                self.tracking_view=TrackingView(self.window())
+                self.tracking_view.statusChanged.connect(self.tracking_view_status)
+            self.tracking_view.start(url)
             self.status.setText('アプリ内でカメラ追跡を開始しました。初回のみOSのカメラ・マイク許可が必要です。')
-            self.start_button.setText('カメラ追跡を表示')
+            self.start_button.setText('カメラ追跡中')
             return True
         except Exception as exc:
             if automatic:raise
@@ -166,18 +168,14 @@ class VtuberPanel(QWidget):
         QTimer.singleShot(0,restart)
 
     def stop_tracking(self):
-        dialog,self.tracking_dialog=self.tracking_dialog,None
         self.server.stop();self.server.state.detected=False
         self.mode.setCurrentIndex(0);self.start_button.setText('カメラ追跡を開始')
         self.status.setText('カメラ入力と追跡を停止しました。')
-        if dialog:dialog.close()
+        if self.tracking_view:self.tracking_view.stop()
 
-    def tracking_dialog_finished(self,*_):
-        self.tracking_dialog=None
-        if self.server.server is not None:
-            self.server.stop();self.server.state.detected=False
-            self.mode.setCurrentIndex(0);self.start_button.setText('カメラ追跡を開始')
-            self.status.setText('カメラ入力と追跡を停止しました。')
+    def tracking_view_status(self,ok,message):
+        if not ok and self.server.server is not None:
+            self.status.setText(message)
 
     def calibrate(self):
         raw,detected,_,_=self.server.state.snapshot()

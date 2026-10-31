@@ -1,28 +1,36 @@
-"""In-app camera and microphone capture for local face tracking."""
-from PySide6.QtCore import Qt, QUrl
+"""Invisible in-app web surface for camera permissions and face tracking."""
+from PySide6.QtCore import QEvent, Qt, QUrl, Signal
 from PySide6.QtWebEngineCore import QWebEnginePermission
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout
 
 
-class TrackingDialog(QDialog):
-    def __init__(self, parent, url):
-        super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle('V体のカメラ追跡 — たぬつな Studio')
-        self.resize(600, 720)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        self.status = QLabel('カメラを準備しています。初回のみOSの許可ダイアログを確認してください。')
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        self.view = QWebEngineView(self)
-        self.view.page().permissionRequested.connect(self.permission_requested)
-        self.view.loadFinished.connect(self.loaded)
-        layout.addWidget(self.view, 1)
-        close = QPushButton('追跡を停止して閉じる')
-        close.clicked.connect(self.accept)
-        layout.addWidget(close)
-        self.view.setUrl(QUrl(url))
+class TrackingView(QWebEngineView):
+    statusChanged = Signal(bool, str)
+
+    def __init__(self, parent):
+        # Keep the tracker as a child of Studio's main window. It stays alive
+        # while the user switches pages and never creates another OS window.
+        super().__init__(parent)
+        self.setFixedSize(2, 2)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.page().permissionRequested.connect(self.permission_requested)
+        self.loadFinished.connect(self.loaded)
+        self.setStyleSheet('background: transparent; border: none;')
+        parent.installEventFilter(self)
+        self.move(max(0, parent.width()-2), max(0, parent.height()-2))
+
+    def eventFilter(self, watched, event):
+        if watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self.move(max(0, watched.width()-2), max(0, watched.height()-2))
+        return super().eventFilter(watched, event)
+
+    def start(self, url):
+        self.setUrl(QUrl(url))
+        self.show()
+
+    def stop(self):
+        self.setUrl(QUrl('about:blank'))
 
     def permission_requested(self, permission):
         allowed = {
@@ -36,7 +44,4 @@ class TrackingDialog(QDialog):
             permission.deny()
 
     def loaded(self, ok):
-        if not ok:
-            self.status.setText('アプリ内のカメラ画面を読み込めませんでした。追跡モデルの配置を確認してください。')
-        else:
-            self.status.setText('カメラ映像はこのPC内で処理されます。顔画像・音声を保存したり送信したりしません。')
+        self.statusChanged.emit(bool(ok), '追跡画面を準備できません。アプリ内のカメラ機能を確認してください。' if not ok else '')
