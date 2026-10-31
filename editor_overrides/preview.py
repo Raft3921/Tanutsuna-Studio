@@ -14,16 +14,28 @@ from .async_images import AsyncImages
 
 
 class Canvas(QWidget):
+    clipClicked = Signal(str)
+
     def __init__(self, preview):
         super().__init__(preview)
         self.preview = preview
         self.setMinimumSize(320, 180)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def videoSink(self):
         return self.preview.main_channel.video
 
     def composite(self, width, height):
         return self.preview.compose(width, height)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            clip = self.preview.clip_at(event.position())
+            if clip is not None:
+                self.clipClicked.emit(clip.id)
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -273,6 +285,46 @@ class Preview(QWidget):
             asset = self.library.assets[self.source_id]
             return max(1, round(asset.duration_ms*self.rate/1000)) if asset.kind in ('title', 'image') else asset.frames(self.rate)
         return self.sequence.end
+
+    def clip_at(self, point):
+        """Return the topmost visible timeline clip under a canvas click."""
+        if self.mode != 'timeline' or self.frame >= self.sequence.end:
+            return None
+        sequence = self.sequence
+        ratio = min(self.video.width() / sequence.width,
+                    self.video.height() / sequence.height)
+        if ratio <= 0:
+            return None
+        target_width = max(1, round(sequence.width * ratio))
+        target_height = max(1, round(sequence.height * ratio))
+        local_x = point.x() - (self.video.width() - target_width) // 2
+        local_y = point.y() - (self.video.height() - target_height) // 2
+        if not (0 <= local_x < target_width and 0 <= local_y < target_height):
+            return None
+        x, y = local_x / ratio, local_y / ratio
+        for clip in reversed(sequence.active_clips(self.frame)):
+            asset = self.library.assets[clip.asset_id]
+            if not asset.has_video:
+                continue
+            image_width = max(1, asset.width or sequence.width)
+            image_height = max(1, asset.height or sequence.height)
+            tx, ty, scale, _opacity = self.transforms.get(
+                clip.id, clip.transform_at(clip.source_in + self.frame - clip.start))
+            factor = min(sequence.width / image_width, sequence.height / image_height) * scale
+            draw_width, draw_height = image_width * factor, image_height * factor
+            left = (sequence.width - draw_width) / 2 + tx
+            top = (sequence.height - draw_height) / 2 + ty
+            if not (left <= x <= left + draw_width and top <= y <= top + draw_height):
+                continue
+            channel = self.channels.get(channel_key((), clip.track))
+            image = channel.image if channel and channel.clip and channel.clip.id == clip.id else None
+            if image is not None and not image.isNull() and asset.kind != 'compound':
+                px = min(image.width() - 1, max(0, int((x - left) / max(1, draw_width) * image.width())))
+                py = min(image.height() - 1, max(0, int((y - top) / max(1, draw_height) * image.height())))
+                if image.pixelColor(px, py).alpha() <= 8:
+                    continue
+            return clip
+        return None
 
     def visible_channels(self):
         if self.mode == 'source' and self.library.assets.get(self.source_id) and self.library.assets[self.source_id].kind != 'compound':
