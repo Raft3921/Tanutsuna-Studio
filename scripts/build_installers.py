@@ -202,6 +202,7 @@ try {
   $Shortcut = $Shell.CreateShortcut((Join-Path $ShortcutDir 'たぬつな Studio.lnk'))
   $Shortcut.TargetPath = Join-Path $Install 'Tanutsuna Studio.exe'
   $Shortcut.WorkingDirectory = $Install
+  $Shortcut.IconLocation = (Join-Path $Install 'app\studio\assets\tanutsuna-studio.ico') + ',0'
   $Shortcut.Save()
   Write-Host 'インストールが完了しました。Studioを起動します。' -ForegroundColor Green
   Start-Process -FilePath (Join-Path $Install 'Tanutsuna Studio.exe')

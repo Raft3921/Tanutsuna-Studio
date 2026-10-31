@@ -25,7 +25,9 @@ class StudioWindow(QMainWindow):
         self.pending_media=None
         self.update_worker=None;self.update_release=None;self.update_package=None
         self._update_action_mode=None
-        self.setWindowTitle('たぬつな Studio');self.resize(1360,900);self.setMinimumSize(1120,740)
+        self.setWindowTitle('たぬつな Studio')
+        self.setWindowIcon(QIcon(str(Path(__file__).parent/'assets/tanutsuna-studio-icon.png')))
+        self.resize(1360,900);self.setMinimumSize(1120,740)
         self.desk=ProductionDesk(self,workspace);self.setCentralWidget(self.desk)
         menu=self.menuBar().addMenu('ファイル')
         for title,fn,key in [('録画用の作品を作成',self.desk.quick_record,QKeySequence.StandardKey.New),
@@ -469,6 +471,13 @@ from .takes import takes_for
 
 
 def main():
+    if sys.platform=='win32':
+        # Give the Python-hosted Qt process a stable Studio identity so
+        # Windows taskbar grouping and notifications do not show Python.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Raft3921.TanutsunaStudio')
+        except (AttributeError,OSError):pass
     if sys.platform == 'darwin' and getattr(sys, 'frozen', False):
         # PyInstaller nests Qt frameworks under PySide6/Qt/lib, while QtWebEngine
         # searches Contents/Frameworks/QtWebEngineCore.framework by default.
@@ -495,7 +504,8 @@ def main():
     # response to the live/record button after the GUI is already active.
     from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
     app=QApplication(sys.argv)
-    app.setApplicationName('Tanutsuna Studio');app.setOrganizationName('TanutsunaStudio')
+    app.setApplicationName('Tanutsuna Studio');app.setApplicationDisplayName('たぬつな Studio');app.setOrganizationName('TanutsunaStudio')
+    app.setWindowIcon(QIcon(str(Path(__file__).parent/'assets/tanutsuna-studio-icon.png')))
     splash_image=QPixmap(520,180);splash_image.fill(QColor('#171b24'))
     painter=QPainter(splash_image);painter.setPen(QColor('#f1f4fa'))
     painter.drawText(splash_image.rect(),Qt.AlignmentFlag.AlignCenter,'たぬつな Studio\n起動しています…')
