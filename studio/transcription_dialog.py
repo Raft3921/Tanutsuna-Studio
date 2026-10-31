@@ -36,7 +36,9 @@ class TranscriptionDialog(QDialog):
         choices = []
         for clip in editor.sequence.ordered():
             asset = editor.library.assets[clip.asset_id]
-            if asset.kind != 'media' or not asset.has_audio:
+            # Some imported videos have stale has_audio metadata. Let FFmpeg
+            # inspect their actual audio stream when the user starts a job.
+            if asset.kind != 'media' or not (asset.has_audio or asset.has_video):
                 continue
             role = audio_role(asset, paths)
             label = f'{asset.name} ・ {clip.start / float(editor.sequence.rate):.1f}秒〜 ・ {"マイク" if role == "voice" else "音声"}'
@@ -93,7 +95,7 @@ class TranscriptionDialog(QDialog):
         close.accepted.connect(self.accept)
         layout.addWidget(close)
         self.jobs = Jobs(self)
-        self.jobs.finished.connect(self.finished)
+        self.jobs.finished.connect(self.transcription_finished)
         self.jobs.progress.connect(self.status.setText)
 
     def start_transcription(self):
@@ -133,7 +135,7 @@ class TranscriptionDialog(QDialog):
         self.status.setText('中止しています。作業中のファイルは破棄し、元の音声は保持します。')
         self.start_button.setEnabled(False)
 
-    def finished(self, tag, result, error):
+    def transcription_finished(self, tag, result, error):
         if tag != 'transcription':
             return
         self._set_inputs(True)

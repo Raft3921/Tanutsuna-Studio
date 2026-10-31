@@ -29,7 +29,7 @@ class SilenceDialog(QDialog):
         self.voices=[];self.audio_clips=[]
         for clip in editor.sequence.ordered():
             asset=editor.library.assets[clip.asset_id]
-            if asset.kind=='media' and asset.has_audio:
+            if asset.kind=='media' and (asset.has_audio or asset.has_video):
                 self.audio_clips.append(clip.id)
                 if audio_role(asset,paths)=='voice':self.voices.append(clip.id)
         self.auto_targets=self.voices or self.audio_clips

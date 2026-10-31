@@ -3,6 +3,7 @@ from pathlib import Path
 import copy
 import math
 import re
+import subprocess
 import tempfile
 from cutraft.model import Clip, uid
 from cutraft.media_cache import ffmpeg_executable
@@ -77,13 +78,28 @@ def parse_silences(lines, duration):
     return merge_ranges(result)
 
 
+def has_audio_stream(path):
+    """Probe the media itself; imported asset metadata can miss video audio."""
+    try:
+        result = subprocess.run(
+            [ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin',
+             '-threads', '1', '-i', str(path), '-map', '0:a:0', '-frames:a', '1',
+             '-f', 'null', '-'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=20, check=False,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def analyze_silence(library, sequence_id, clip_ids, threshold, minimum, padding, cancel):
     seq=next(s for s in library.sequences if s.id==sequence_id);rate=float(seq.rate)
-    candidates=[];speaking=[]
+    candidates=[];speaking=[];analyzed=0
     with tempfile.TemporaryDirectory(prefix='tanutsuna-silence-') as directory:
         for index,clip in enumerate(c for c in seq.clips if c.id in clip_ids):
             asset=library.assets[clip.asset_id]
-            if asset.kind!='media' or not asset.has_audio:raise ValueError('音声ファイルのクリップを指定してください。複合クリップは中を開いて解析できます。')
+            if asset.kind!='media' or not has_audio_stream(asset.path):continue
+            analyzed+=1
             duration=clip.duration/rate;log=Path(directory)/f'{index}.log'
             run_command([ffmpeg_executable(),'-hide_banner','-nostdin','-nostats','-threads','1',
                 '-ss',f'{clip.source_in/rate:.9f}','-i',asset.path,'-t',f'{duration:.9f}',
@@ -95,6 +111,8 @@ def analyze_silence(library, sequence_id, clip_ids, threshold, minimum, padding,
                 min(clip.end,clip.start+math.floor((b-padding)*rate))) for a,b in silent)
             candidates.extend(local)
             speaking.extend(subtract_ranges([(clip.start,clip.end)],local))
+    if not analyzed:
+        raise ValueError('選択した動画・音声素材から音声を検出できませんでした。音声が聞こえる素材をタイムラインに配置してください。')
     # If two voice recordings overlap, keep any interval where either is speaking.
     return subtract_ranges(merge_ranges(candidates),speaking)
 
