@@ -443,6 +443,11 @@ from .takes import takes_for
 def main():
     from .avatar_gl import configure_opengl
     configure_opengl()
+    # TrackingDialog imports QtWebEngineWidgets only when camera tracking is
+    # first opened. Initialize WebEngine before QApplication so that this lazy
+    # import cannot reach QWebEnginePage with an uninitialized global context.
+    from PySide6.QtWebEngineQuick import QtWebEngineQuick
+    QtWebEngineQuick.initialize()
     app=QApplication(sys.argv)
     app.setApplicationName('Tanutsuna Studio');app.setOrganizationName('TanutsunaStudio')
     splash_image=QPixmap(520,180);splash_image.fill(QColor('#171b24'))
