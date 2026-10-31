@@ -401,7 +401,12 @@ class StudioWindow(QMainWindow):
             self.desk.update_progress.hide()
             if result.get('available'):
                 self.update_release=result
-                self.desk.update_status.setText(f"新しい版 {result['version']} が見つかりました。配布ファイルを確認してから入れ替えます。")
+                size=result.get('size',0)
+                size_label=f"{max(1,size//1024)} KB" if size<1024*1024 else f"{size/(1024*1024):.1f} MB"
+                if result.get('delta'):
+                    self.desk.update_status.setText(f"新しい版 {result['version']} が見つかりました。変更分のみ（約{size_label}）を取得します。")
+                else:
+                    self.desk.update_status.setText(f"新しい版 {result['version']} が見つかりました。この版への差分がないため、完全版（約{size_label}）を取得します。")
                 if result.get('unsupported'):
                     self.desk.update_status.setText(f"新しい版 {result['version']} があります。Releaseページからお使いの起動方式に合う更新を取得してください。")
                     self.desk.update_download_button.setEnabled(False)
@@ -412,7 +417,8 @@ class StudioWindow(QMainWindow):
         elif action=='download':
             self.update_package=Path(result['package'])
             self.desk.update_progress.setValue(100)
-            self.desk.update_status.setText(f"{result['version']} をダウンロードし、サイズ・SHA-256・ZIP構成を確認しました。再起動して適用できます。")
+            kind='差分' if result.get('delta') else '完全版'
+            self.desk.update_status.setText(f"{result['version']} の{kind}を取得し、サイズ・SHA-256・ZIP構成を確認しました。再起動して適用できます。")
             self.desk.update_download_button.setEnabled(False)
             self.desk.update_install_button.setEnabled(True)
         elif action=='install' and result.get('restarting'):

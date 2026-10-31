@@ -77,6 +77,10 @@ def latest_release() -> dict:
         return {"available": True, "version": tag, "unsupported": True,
                 "url": release.get("html_url", "")}
     asset = next((item for item in release.get("assets", []) if item.get("name") == wanted), None)
+    delta_name = f"Tanutsuna-Studio-{packaged_platform()}-from-{STUDIO_VERSION}.zip"
+    delta = next((item for item in release.get("assets", []) if item.get("name") == delta_name), None)
+    if delta:
+        asset = delta
     if not asset:
         raise RuntimeError(f"Release {tag} に {wanted} がありません。更新を安全に適用できません。")
     digest = asset.get("digest", "")
@@ -84,7 +88,9 @@ def latest_release() -> dict:
         raise RuntimeError("配布ファイルにSHA-256検証情報がありません。更新を停止しました。")
     return {"available": True, "version": tag, "url": asset["browser_download_url"],
             "size": int(asset.get("size", 0)), "sha256": digest[7:],
-            "asset": wanted, "release_url": release.get("html_url", "")}
+            "asset": asset["name"], "delta": bool(delta),
+            "from_version": STUDIO_VERSION if delta else "",
+            "release_url": release.get("html_url", "")}
 
 
 def _emit_progress(progress, value: int, message: str) -> None:
@@ -169,6 +175,39 @@ def _download(release: dict, destination: Path, progress=None) -> None:
         is_mac = packaged_platform() == "macOS-arm64"
         entries = _safe_zip_entries(archive, allow_symlinks=is_mac)
         names = archive.namelist()
+        if release.get("delta"):
+            if "delta-manifest.json" not in names:
+                raise RuntimeError("差分更新ZIPにマニフェストがありません。")
+            manifest = json.loads(archive.read("delta-manifest.json"))
+            expected_platform = packaged_platform()
+            if (manifest.get("format") != "tanutsuna-delta-v1" or
+                    manifest.get("from") != release.get("from_version") or
+                    manifest.get("version") != release["version"].lstrip("v") or
+                    manifest.get("platform") != expected_platform):
+                raise RuntimeError("差分更新の版数または対象OSが一致しません。")
+            declared = manifest.get("files", {})
+            if not isinstance(declared, dict) or any(not isinstance(row, dict) for row in declared.values()):
+                raise RuntimeError("差分更新のファイル一覧が正しくありません。")
+            if "delta-manifest.json" in declared:
+                raise RuntimeError("差分更新のマニフェスト名がファイル一覧と重複しています。")
+            deleted = set(manifest.get("delete", []))
+            for path in list(declared) + list(deleted):
+                _delta_path(path)
+            if not declared or set(declared) & deleted:
+                raise RuntimeError("差分更新の対象ファイル一覧が正しくありません。")
+            archive_names = {name.rstrip("/") for name in names}
+            if not set(declared).issubset(archive_names):
+                raise RuntimeError("差分更新ZIPに必要なファイルがありません。")
+            for path, row in declared.items():
+                data = archive.read(path)
+                if hashlib.sha256(data).hexdigest().lower() != row.get("sha256", "").lower():
+                    raise RuntimeError(f"差分更新の検証に失敗しました: {path}")
+            extra = archive_names - set(declared) - {"delta-manifest.json"}
+            if extra:
+                raise RuntimeError(f"差分更新ZIPに未登録のファイルがあります: {next(iter(extra))}")
+            _emit_progress(progress, 99, "差分ファイルと版数を確認しました。")
+            _emit_progress(progress, 100, "更新ファイルの検証が完了しました。")
+            return
         if packaged_platform() == "Windows11-x64":
             if "Tanutsuna Studio.exe" not in names or "studio-manifest.json" not in names:
                 raise RuntimeError("Windows更新ZIPの構成が正しくありません。")
@@ -241,6 +280,68 @@ def _extract_mac(package: Path, stage: Path, progress=None, start=0, end=95) -> 
     _emit_progress(progress, end + 1, "Macアプリの実行属性とリソースを復元しました。")
 
 
+def _delta_path(value: str) -> tuple[str, ...]:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        raise RuntimeError("差分更新に不正なファイル名があります。")
+    path = PurePosixPath(value)
+    parts = tuple(part for part in path.parts if part not in ("", "."))
+    if path.is_absolute() or not parts or any(part == ".." for part in path.parts) or ":" in parts[0]:
+        raise RuntimeError("差分更新にアプリ外を指すパスがあります。")
+    return parts
+
+
+def _extract_delta(archive: zipfile.ZipFile, stage: Path, manifest: dict) -> None:
+    stage.mkdir(parents=True, exist_ok=True)
+    (stage / "delta-manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    for relative, row in manifest["files"].items():
+        parts = _delta_path(relative)
+        target = stage.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = archive.open(relative)
+        try:
+            payload = source.read()
+        finally:
+            source.close()
+        if row.get("type") == "symlink":
+            link = payload.decode("utf-8")
+            _safe_zip_entries_for_link(parts, link)
+            target.unlink(missing_ok=True)
+            os.symlink(link, target)
+        elif row.get("type") == "file":
+            target.write_bytes(payload)
+            mode = int(row.get("mode", 0)) & 0o777
+            if mode:
+                target.chmod(mode)
+        else:
+            raise RuntimeError(f"差分更新のファイル形式が不明です: {relative}")
+
+
+def _safe_zip_entries_for_link(parts: tuple[str, ...], link: str) -> None:
+    target = PurePosixPath(link)
+    if not link or target.is_absolute() or "\\" in link or "\x00" in link:
+        raise RuntimeError("差分更新に不正なシンボリックリンクがあります。")
+    stack = list(parts[:-1])
+    for part in target.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not stack:
+                raise RuntimeError("差分更新のリンク先がアプリの外を指しています。")
+            stack.pop()
+        else:
+            stack.append(part)
+
+
+def _clone_tree(source: Path, destination: Path) -> None:
+    process = subprocess.run(["/bin/cp", "-acR", str(source), str(destination)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    if process.returncode:
+        import shutil
+        shutil.rmtree(destination, ignore_errors=True)
+        shutil.copytree(source, destination, symlinks=True)
+
+
 def _data_root() -> Path:
     from PySide6.QtCore import QStandardPaths
     return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))
@@ -270,10 +371,48 @@ def install_and_restart(release: dict, package: Path, current_pid: int, progress
     work.mkdir(parents=True, exist_ok=False)
     stage = work / "stage"
     stage.mkdir()
+    is_mac = packaged_platform() == "macOS-arm64"
+    delta = bool(release.get("delta"))
+    manifest = None
     with zipfile.ZipFile(package) as archive:
-        is_mac = packaged_platform() == "macOS-arm64"
         entries = _safe_zip_entries(archive, allow_symlinks=is_mac)
-        if is_mac:
+        if delta:
+            manifest = json.loads(archive.read("delta-manifest.json"))
+            if manifest.get("from") != release.get("from_version"):
+                raise RuntimeError("差分更新の元の版数が一致しません。完全版から更新してください。")
+            _extract_delta(archive, stage, manifest)
+            if is_mac:
+                candidate = stage / target.name
+                _clone_tree(target, candidate)
+                for relative in manifest["delete"]:
+                    parts = _delta_path(relative)
+                    destination = candidate.joinpath(*parts)
+                    if any(candidate.joinpath(*parts[:index]).is_symlink()
+                           for index in range(1, len(parts))):
+                        raise RuntimeError(f"更新対象の親フォルダーがシンボリックリンクです: {relative}")
+                    if destination.is_dir() and not destination.is_symlink():
+                        raise RuntimeError(f"差分更新でフォルダーを削除できません: {relative}")
+                    destination.unlink(missing_ok=True)
+                delta_root = stage
+                import shutil
+                for relative, row in manifest["files"].items():
+                    parts = _delta_path(relative)
+                    destination = candidate.joinpath(*parts)
+                    if any(candidate.joinpath(*parts[:index]).is_symlink()
+                           for index in range(1, len(parts))):
+                        raise RuntimeError(f"更新対象の親フォルダーがシンボリックリンクです: {relative}")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    source = delta_root.joinpath(*parts)
+                    if destination.is_dir() and not destination.is_symlink():
+                        raise RuntimeError(f"更新対象のファイル位置にフォルダーがあります: {relative}")
+                    destination.unlink(missing_ok=True)
+                    if row.get("type") == "symlink":
+                        os.symlink(os.readlink(source), destination)
+                    else:
+                        shutil.copy2(source, destination)
+                subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(candidate)], check=True)
+                _emit_progress(progress, 95, "差分を適用し、Macアプリを再署名しました。")
+        elif is_mac:
             _extract_mac(package, stage, progress, start=5, end=95)
         else:
             _extract_windows(archive, stage, entries, progress, start=5, end=95)
@@ -325,10 +464,70 @@ exit 2
     else:
         candidate = stage
         helper = work / "install-update.ps1"
-        helper.write_text(r'''param($Target,$Stage,$Backup,$Marker,$Token,[int]$Pid,[string]$Work)
+        helper.write_text(r'''param($Target,$Stage,$Backup,$Marker,$Token,[int]$Pid,[string]$Work,[string]$Delta)
 $ErrorActionPreference = 'Stop'
 $deadline = (Get-Date).AddSeconds(90)
 while ((Get-Process -Id $Pid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+if ($Delta -eq 'true') {
+  $Manifest = Get-Content -LiteralPath (Join-Path $Stage 'delta-manifest.json') -Raw | ConvertFrom-Json
+  $Done = [System.Collections.Generic.List[object]]::new()
+  try {
+    New-Item -ItemType Directory -Force -Path $Backup | Out-Null
+    $DeleteSet = @($Manifest.delete)
+    $Changed = @($Manifest.files.PSObject.Properties.Name) + $DeleteSet
+    foreach ($Relative in $Changed) {
+      $Dest = Join-Path $Target $Relative
+      $Saved = Join-Path $Backup $Relative
+      $HadFile = Test-Path -LiteralPath $Dest
+      $Entry = [pscustomobject]@{ Path=$Relative; Existed=$HadFile; Updated=$false }
+      $Done.Add($Entry)
+      if ($HadFile) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Saved) | Out-Null
+        Copy-Item -LiteralPath $Dest -Destination $Saved -Force
+      }
+      if ($DeleteSet -contains $Relative) {
+        if ($HadFile) { Remove-Item -LiteralPath $Dest -Force }
+        $Entry.Updated = $true
+      }
+      else {
+        $Source = Join-Path $Stage $Relative
+        if (!(Test-Path -LiteralPath $Source)) { throw "Missing update file: $Relative" }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dest) | Out-Null
+        $Temporary = "$Dest.update-$Token"
+        Copy-Item -LiteralPath $Source -Destination $Temporary -Force
+        Move-Item -LiteralPath $Temporary -Destination $Dest -Force
+        $Entry.Updated = $true
+      }
+    }
+    Start-Process -FilePath (Join-Path $Target 'Tanutsuna Studio.exe') -ArgumentList @('--update-token',$Token)
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline) {
+      if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -like "*$Token*")) { Remove-Item $Backup,$Work -Recurse -Force -ErrorAction SilentlyContinue; exit 0 }
+      Start-Sleep -Seconds 1
+    }
+    throw 'Updated app did not report successful startup'
+  } catch {
+    for ($i = $Done.Count - 1; $i -ge 0; $i--) {
+      $Item = $Done[$i]
+      $Dest = Join-Path $Target $Item.Path
+      $Saved = Join-Path $Backup $Item.Path
+      $Temporary = "$Dest.update-$Token"
+      if (Test-Path -LiteralPath $Temporary) { Remove-Item -LiteralPath $Temporary -Force -ErrorAction SilentlyContinue }
+      if ($Item.Updated) {
+        if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force }
+        if ($Item.Existed -and (Test-Path -LiteralPath $Saved)) {
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dest) | Out-Null
+          Copy-Item -LiteralPath $Saved -Destination $Dest -Force
+        }
+      } elseif (!$Item.Existed -and (Test-Path -LiteralPath $Dest)) {
+        Remove-Item -LiteralPath $Dest -Force
+      }
+    }
+    Remove-Item $Backup,$Work -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path (Join-Path $Target 'Tanutsuna Studio.exe')) { Start-Process (Join-Path $Target 'Tanutsuna Studio.exe') }
+    exit 2
+  }
+}
 try {
   if (Test-Path $Backup) { Remove-Item $Backup -Recurse -Force }
   Move-Item -LiteralPath $Target -Destination $Backup
@@ -351,9 +550,10 @@ try {
 }
 ''', encoding="utf-8")
         _emit_progress(progress, 99, "アプリの入れ替えと再起動を準備中…")
+        backup = str(work / "backup") if delta else str(target)+".previous-"+token
         subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper),
-                          str(target), str(candidate), str(target)+".previous-"+token,
-                          str(marker), token, str(current_pid), str(work)],
+                          str(target), str(candidate), backup,
+                          str(marker), token, str(current_pid), str(work), str(delta).lower()],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), close_fds=True)
 
@@ -377,7 +577,8 @@ class UpdateWorker(QThread):
                 folder.mkdir(parents=True, exist_ok=True)
                 package = folder / self.release["asset"]
                 _download(self.release, package, self.progress.emit)
-                result = {"downloaded": True, "package": str(package), "version": self.release["version"]}
+                result = {"downloaded": True, "package": str(package), "version": self.release["version"],
+                          "delta": bool(self.release.get("delta"))}
             elif self.action == "install":
                 install_and_restart(self.release, self.package, os.getpid(), self.progress.emit)
                 result = {"restarting": True}
