@@ -173,7 +173,8 @@ class TranscriptionDialog(QDialog):
         if not self.raw_cues:
             return
         self.cues = split_timed_cues(self.raw_cues, self.max_chars.value(), self.max_words.value(),
-            self.line_break.isChecked(), self.line_chars.value(), float(self.editor.sequence.rate))
+            self.line_break.isChecked(), self.line_chars.value(), float(self.editor.sequence.rate),
+            self.language.currentData())
         self.table.setRowCount(len(self.cues))
         for row, (start, end, text) in enumerate(self.cues):
             for column, value in enumerate((f'{start:.3f}', f'{end:.3f}', text)):

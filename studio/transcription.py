@@ -168,6 +168,29 @@ def _json_time_seconds(value):
     return None
 
 
+def _clean_whisper_text(value):
+    """Remove Whisper control/sentinel tokens before they reach subtitle text."""
+    text = str(value or '')
+    text = re.sub(r'<\|[^|]*\|>', ' ', text)
+    text = re.sub(r'\[\s*_[A-Z][A-Z0-9_]*(?:\s*\d+)?\s*\]', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[\s*(?:BLANK_AUDIO|SPEAKER_ID_\d+)\s*\]', ' ', text, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _normalize_utterance(text, language='ja'):
+    text = _clean_whisper_text(text)
+    # Whisper sometimes spells an isolated Japanese vowel sequence as Latin
+    # letter names. Normalize that narrow, unambiguous pattern in Japanese mode.
+    if language in ('ja', 'auto'):
+        text = re.sub(r'(?<=[\u3040-\u30ff\u3400-\u9fff])\s+(?=[\u3040-\u30ff\u3400-\u9fff])', '', text)
+        text = re.sub(r'(?<![A-Za-z])A[\s-]*I[\s-]*U[\s-]*E[\s-]*O(?![A-Za-z])',
+                      'あいうえお', text, flags=re.IGNORECASE)
+        # This uncommon homophone is a frequent small-model error for the
+        # spoken kana sequence; leave the phonetic wording in readable kana.
+        text = text.replace('書き空け子', 'かきくけこ')
+    return text
+
+
 def parse_whisper_json(path):
     """Read timed Whisper tokens, falling back to segment timing when needed."""
     with Path(path).open(encoding='utf-8') as source:
@@ -182,20 +205,23 @@ def parse_whisper_json(path):
             segment_start = _json_time_seconds(segment_times.get('from'))
         if segment_end is None:
             segment_end = _json_time_seconds(segment_times.get('to'))
-        text = str(segment.get('text') or '')
-        tokens = [token for token in (segment.get('tokens') or [])
-                  if str(token.get('text') or '').strip() and not str(token.get('text', '')).startswith('<|')]
+        text = _clean_whisper_text(segment.get('text'))
+        tokens = []
+        for token in segment.get('tokens') or []:
+            token_text = _clean_whisper_text(token.get('text'))
+            if token_text:
+                tokens.append((token, token_text))
         if not tokens:
             if segment_start is not None and segment_end is not None and segment_end > segment_start and text.strip():
                 result.append((segment_start, segment_end, text))
             continue
         fallback_start = segment_start if segment_start is not None else 0.0
         fallback_end = segment_end if segment_end is not None and segment_end > fallback_start else fallback_start + .01
-        weights = [max(1, len(_graphemes(str(token.get('text') or '')))) for token in tokens]
+        weights = [max(1, len(_graphemes(token_text))) for _token, token_text in tokens]
         total = sum(weights)
         cursor = fallback_start
         consumed = 0
-        for token, weight in zip(tokens, weights):
+        for (token, token_text), weight in zip(tokens, weights):
             timestamps = token.get('timestamps') or {}
             offsets = token.get('offsets') or {}
             start = _json_time_seconds(offsets.get('from'))
@@ -209,7 +235,7 @@ def parse_whisper_json(path):
                 end = fallback_start + (fallback_end - fallback_start) * ((consumed + weight) / total)
             start = min(max(fallback_start, start), max(fallback_start, fallback_end - .01))
             end = min(fallback_end, max(start + .01, end))
-            result.append((start, end, str(token.get('text') or '')))
+            result.append((start, end, token_text))
             cursor = end
             consumed += weight
     return result
@@ -263,12 +289,12 @@ def format_caption(text, max_chars=20, max_words=8, line_break=True, chars_per_l
     return result
 
 
-def split_timed_cues(cues, max_chars, max_words, line_break, chars_per_line, rate):
+def split_timed_cues(cues, max_chars, max_words, line_break, chars_per_line, rate, language='ja'):
     max_chars = max(1, int(max_chars))
     max_words = max(0, int(max_words))
     tokens = []
     for start, end, text in cues:
-        text = re.sub(r'\s+', ' ', str(text))
+        text = _clean_whisper_text(text)
         if not text.strip() or end <= start:
             continue
         clusters = _graphemes(text)
@@ -292,7 +318,7 @@ def split_timed_cues(cues, max_chars, max_words, line_break, chars_per_line, rat
     def flush():
         if not group:
             return
-        text = ''.join(item[2] for item in group).strip()
+        text = _normalize_utterance(''.join(item[2] for item in group), language)
         if line_break and text:
             text = _wrap_caption(text, max(1, int(chars_per_line)))
         if text:

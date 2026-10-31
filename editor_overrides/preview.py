@@ -21,6 +21,7 @@ class Canvas(QWidget):
         super().__init__(preview)
         self.preview = preview
         self.setMinimumSize(320, 180)
+        self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip('プレビューの素材をクリックして選択。中央をドラッグして移動、四隅・上下左右でサイズ変更、上のバーで回転します。Shiftを押しながらサイズ変更すると縦横比を個別に調整できます。')
         self._gesture = None
@@ -75,12 +76,16 @@ class Canvas(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             selected = next((c for c in self.preview.sequence.active_clips(self.preview.frame)
                              if c.id == getattr(self.preview, 'editing_clip_id', '')), None)
-            clip = self.preview.clip_at(event.position())
-            if clip is None and selected and self.preview.library.assets[selected.asset_id].has_video:
+            selected_handle = None
+            if selected and self.preview.library.assets[selected.asset_id].has_video:
                 handles=self._handles(*self._geometry(selected)[:4])
-                if any(math.hypot(event.position().x()-pt.x(),event.position().y()-pt.y())<=12
-                       for name,pt in handles.items() if name!='move'):
-                    clip=selected
+                distances=[(math.hypot(event.position().x()-pt.x(),event.position().y()-pt.y()),name)
+                           for name,pt in handles.items() if name!='move']
+                distance, selected_handle = min(distances, default=(float('inf'), None))
+                if distance > 22:selected_handle=None
+            # Handles on the selected item take precedence over another visible
+            # layer underneath them. This keeps the small corner targets grabbable.
+            clip = selected if selected_handle else self.preview.clip_at(event.position())
             if clip is not None:
                 if clip.id != getattr(self.preview, 'editing_clip_id', ''):
                     self.preview.editing_clip_id = clip.id
@@ -90,14 +95,15 @@ class Canvas(QWidget):
                 ratio, ox, oy = self._mapping()
                 pointer_doc=((event.position().x()-ox)/ratio,(event.position().y()-oy)/ratio)
                 local = self._to_local(pointer_doc, center, rotation)
-                mode = next((name for name, point in handles.items()
-                             if math.hypot(event.position().x()-point.x(), event.position().y()-point.y()) <= 12), None)
+                mode = selected_handle or next((name for name, point in handles.items()
+                             if math.hypot(event.position().x()-point.x(), event.position().y()-point.y()) <= 22), None)
                 if mode is None and abs(local[0]) <= width/2 and abs(local[1]) <= height/2:
                     mode = 'move'
                 if mode:
                     self._gesture = {'clip':clip.id,'mode':mode,'values':values,'center':center,
                         'start':((event.position().x()-ox)/ratio,(event.position().y()-oy)/ratio),
                         'press_local':local,'size':(width,height)}
+                    self.grabMouse()
                     self.setCursor(Qt.CursorShape.ClosedHandCursor if mode == 'move' else Qt.CursorShape.CrossCursor)
                 event.accept(); self.update(); return
             self.preview.editing_clip_id = ''
@@ -111,6 +117,23 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, event):
         if not self._gesture:
+            selected=next((c for c in self.preview.sequence.active_clips(self.preview.frame)
+                           if c.id==getattr(self.preview,'editing_clip_id','')),None)
+            if selected and self.preview.library.assets[selected.asset_id].has_video:
+                handles=self._handles(*self._geometry(selected)[:4])
+                distances=[(math.hypot(event.position().x()-pt.x(),event.position().y()-pt.y()),name)
+                           for name,pt in handles.items()]
+                distance,mode=min(distances,default=(float('inf'),None))
+                if distance<=22:
+                    cursor={'n':Qt.CursorShape.SizeVerCursor,'s':Qt.CursorShape.SizeVerCursor,
+                            'e':Qt.CursorShape.SizeHorCursor,'w':Qt.CursorShape.SizeHorCursor,
+                            'ne':Qt.CursorShape.SizeBDiagCursor,'sw':Qt.CursorShape.SizeBDiagCursor,
+                            'nw':Qt.CursorShape.SizeFDiagCursor,'se':Qt.CursorShape.SizeFDiagCursor,
+                            'rotate':Qt.CursorShape.CrossCursor,'move':Qt.CursorShape.OpenHandCursor}.get(mode,Qt.CursorShape.ArrowCursor)
+                    self.setCursor(cursor);return
+            if self.preview.clip_at(event.position()):
+                self.setCursor(Qt.CursorShape.OpenHandCursor);return
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             return super().mouseMoveEvent(event)
         gesture = self._gesture
         clip = next((c for c in self.preview.sequence.clips if c.id == gesture['clip']), None)
@@ -155,6 +178,7 @@ class Canvas(QWidget):
                 values=self._geometry(clip)[4]
                 self.preview.transforms.pop(clip.id,None);self.preview.extra_transforms.pop(clip.id,None)
                 self.transformEdited.emit(clip.id,*values[:3],values[4],values[5],values[6])
+            self.releaseMouse()
             self.unsetCursor();self.update();event.accept();return
         super().mouseReleaseEvent(event)
 
