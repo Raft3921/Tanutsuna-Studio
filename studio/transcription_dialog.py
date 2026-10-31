@@ -11,6 +11,8 @@ from .jobs import Jobs
 from .subtitle_library import add_entries, save_generated
 from .transcription import MODELS, split_timed_cues, transcribe_clip
 
+VIDEO_EXTENSIONS = {'.mp4', '.mov', '.mkv', '.avi', '.m4v', '.mts', '.m2ts', '.webm'}
+
 
 def note(text):
     label = QLabel(text)
@@ -28,7 +30,7 @@ class TranscriptionDialog(QDialog):
         self.setWindowTitle('自動文字起こし・仮テロップ')
         self.resize(900, 680)
         layout = QVBoxLayout(self)
-        layout.addWidget(note('最初は自分の声（役割が未設定の場合は先頭の音声）を自動で選びます。必要なら別の音声へ切り替えてください。AIモデルはこのPCに保存し、音声も外部へ送らずPC内で処理します。初回は選んだモデルをダウンロードします。'))
+        layout.addWidget(note('タイムライン上の動画・音声クリップを選べます。動画クリップは中の音声を自動で取り出して文字起こしします。最初は自分の声（役割が未設定の場合は先頭のクリップ）を選びます。音声とAI処理はこのPC内で行い、初回は選んだモデルをダウンロードします。'))
         form = QFormLayout()
         self.audio = QComboBox()
         self.clips = {}
@@ -36,12 +38,13 @@ class TranscriptionDialog(QDialog):
         choices = []
         for clip in editor.sequence.ordered():
             asset = editor.library.assets[clip.asset_id]
-            # Some imported videos have stale has_audio metadata. Let FFmpeg
-            # inspect their actual audio stream when the user starts a job.
-            if asset.kind != 'media' or not (asset.has_audio or asset.has_video):
+            # Importers can report stale audio/video flags. The source file is
+            # inspected when FFmpeg extracts the selected clip's audio.
+            if asset.kind != 'media':
                 continue
             role = audio_role(asset, paths)
-            label = f'{asset.name} ・ {clip.start / float(editor.sequence.rate):.1f}秒〜 ・ {"マイク" if role == "voice" else "音声"}'
+            media_type = '動画クリップ' if asset.has_video or asset.path.lower().endswith(tuple(VIDEO_EXTENSIONS)) else '音声クリップ'
+            label = f'{asset.name} ・ {clip.start / float(editor.sequence.rate):.1f}秒〜 ・ {media_type} ・ {"マイク" if role == "voice" else "音声"}'
             choices.append((label, clip, role))
         choices.sort(key=lambda item: (item[2] != 'voice', item[1].start, item[0].casefold()))
         for label, clip, _role in choices:
@@ -51,8 +54,8 @@ class TranscriptionDialog(QDialog):
         if selected and self.audio.findData(selected.id) >= 0:
             self.audio.setCurrentIndex(self.audio.findData(selected.id))
         if not choices:
-            self.audio.addItem('音声のある素材がありません')
-        form.addRow('文字起こしする音声', self.audio)
+            self.audio.addItem('タイムラインに動画・音声クリップがありません')
+        form.addRow('文字起こしするクリップ', self.audio)
         self.model = QComboBox()
         for key, definition in MODELS.items():
             self.model.addItem(definition['label'], key)
@@ -101,7 +104,7 @@ class TranscriptionDialog(QDialog):
     def start_transcription(self):
         clip_id = self.audio.currentData()
         if not clip_id or clip_id not in self.clips:
-            self.status.setText('音声のある素材を編集版に配置してから実行してください。')
+            self.status.setText('文字起こしする動画または音声クリップをタイムラインに配置してください。')
             return
         if self.editor.shell.desk.busy:
             self.status.setText('収録や素材の処理が終わってから実行してください。')

@@ -98,18 +98,26 @@ def transcribe_clip(asset_path, source_in, duration, timeline_start, rate, model
     """Return timeline-second SRT cues from one media clip; all inference stays local."""
     asset_path = Path(asset_path)
     if not asset_path.is_file():
-        raise ValueError('選んだ音声素材が見つかりません。')
+        raise ValueError('選んだクリップの素材ファイルが見つかりません。')
     engine = engine_path()
-    model_file = ensure_model(model, cancel, progress)
     with tempfile.TemporaryDirectory(prefix='tanutsuna-transcript-') as temp:
         temp = Path(temp)
         audio = temp / 'audio.wav'
         log = temp / 'transcription.log'
-        progress('選んだ音声を文字起こし用に準備しています…')
-        run_command([ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
-            '-threads', '1', '-ss', f'{source_in / rate:.9f}', '-i', asset_path,
-            '-t', f'{duration / rate:.9f}', '-vn', '-ar', '16000', '-ac', '1',
-            '-c:a', 'pcm_s16le', audio], log, cancel)
+        progress('選んだクリップから音声を取り出しています…')
+        try:
+            run_command([ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                '-threads', '1', '-ss', f'{source_in / rate:.9f}', '-i', asset_path,
+                '-t', f'{duration / rate:.9f}', '-map', '0:a:0', '-vn', '-ar', '16000', '-ac', '1',
+                '-c:a', 'pcm_s16le', audio], log, cancel)
+        except RuntimeError:
+            details = log.read_text(encoding='utf-8', errors='replace').lower() if log.is_file() else ''
+            if 'matches no streams' in details or 'does not contain any stream' in details:
+                raise ValueError('このクリップから音声トラックを読み取れません。音声付きの動画または音声クリップを選んでください。')
+            raise
+        if not audio.is_file() or audio.stat().st_size <= 44:
+            raise ValueError('クリップから音声を取り出せませんでした。音声付きの動画・音声クリップを選んでください。')
+        model_file = ensure_model(model, cancel, progress)
         prefix = temp / 'result'
         threads = min(4, max(1, (os.cpu_count() or 2) - 1))
         progress('音声をローカルで解析しています…')
