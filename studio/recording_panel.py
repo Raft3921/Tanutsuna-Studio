@@ -79,6 +79,7 @@ class RecordingPanel(QWidget):
         layout.addWidget(splitter, 1)
         settings=QPushButton('V体の見た目・カメラ設定');settings.clicked.connect(lambda:self.desk.navigate('vtuber'));layout.addWidget(settings)
         self.recorder.changed.connect(self.state_changed)
+        self.recorder.progress.connect(self.message)
         self.recorder.started.connect(self.capture_started)
         self.recorder.stopped.connect(self.capture_stopped)
         self.recorder.failed.connect(self.capture_failed)

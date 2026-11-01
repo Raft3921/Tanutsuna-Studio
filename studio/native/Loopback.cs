@@ -41,12 +41,17 @@ interface IAudioCaptureClient {
 class Loopback {
     static volatile bool stopping;
     static void Check(int hr) { Marshal.ThrowExceptionForHR(hr); }
+    static void Log(string message) {
+        Console.Error.WriteLine(DateTime.UtcNow.ToString("o") + " " + message);
+        Console.Error.Flush();
+    }
     static void WriteZeros(BinaryWriter w, long count) {
         byte[] silence = new byte[65536];
         while (count > 0) { int n = (int)Math.Min(count, silence.Length); w.Write(silence, 0, n); count -= n; }
     }
     public static int Main(string[] args) {
         try {
+            Log("PC音録音ヘルパーを開始しました。");
             if (args.Length < 1) throw new Exception("Output WAV path required");
             IMMDevice device;
             var enumerator = (IMMDeviceEnumerator)new EnumeratorClass();
@@ -79,12 +84,19 @@ class Loopback {
                     long dataStart = file.Position, writtenFrames = 0;
                     double epoch = (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
                     Check(client.Start());
+                    Log("WASAPIループバックを開始しました。停止信号を待っています。");
                     Console.WriteLine("{\"type\":\"ready\",\"role\":\"desktop\",\"pts\":" + epoch.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "}");
-                    new Thread(delegate() { Console.ReadLine(); stopping = true; }) { IsBackground = true }.Start();
+                    new Thread(delegate() {
+                        string command = Console.ReadLine();
+                        stopping = true;
+                        Log("停止信号を受信しました。" + (command == null ? "入力チャネル終了" : command));
+                    }) { IsBackground = true }.Start();
                     while (!stopping) {
                         ready.WaitOne(100);
                         uint packets; Check(capture.GetNextPacketSize(out packets));
-                        while (packets > 0) {
+                        // Keep draining while packets are available during recording, but
+                        // never let a continuously busy render device starve the stop signal.
+                        while (packets > 0 && !stopping) {
                             IntPtr data; uint frames, flags; ulong position, qpc;
                             Check(capture.GetBuffer(out data, out frames, out flags, out position, out qpc));
                             try {
@@ -102,16 +114,20 @@ class Loopback {
                             Check(capture.GetNextPacketSize(out packets));
                         }
                     }
+                    Log("音声パケットの取り込みを終了します。");
                     Check(client.Stop());
+                    Log("WASAPIを停止しました。RF64ヘッダーを確定します。");
                     // Default render endpoints may send no packets during silence.
                     long target = (long)(((double)Stopwatch.GetTimestamp() / Stopwatch.Frequency - epoch) * rate);
                     if (target > writtenFrames) WriteZeros(w, (target-writtenFrames)*align);
                     long length = file.Length - dataStart;
                     file.Position = ds64; w.Write(file.Length-8); w.Write(length); w.Write(length / align);
+                    w.Flush(); file.Flush(true);
+                    Log("RF64ファイルを確定しました。" + length + " bytes");
                     Console.WriteLine("{\"type\":\"done\"}");
                 }
             }
             return 0;
-        } catch (Exception e) { Console.Error.WriteLine(e.ToString()); return 1; }
+        } catch (Exception e) { Log("PC音録音エラー: " + e); return 1; }
     }
 }

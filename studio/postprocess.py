@@ -66,9 +66,17 @@ def _finalize(folder, take, cancel, render_avatar=True):
             continue
         temp, output = folder / (role+'.partial.mp3'), folder / (role+'.mp3')
         offset = take['timestamps'][role] - origin
-        run_command([ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
-            '-threads', '1', '-i', source, '-af', audio_filter(offset, duration), '-c:a', 'libmp3lame',
-            '-b:a', '128k' if role == 'voice' else '192k', '-ar', '48000', '-threads', '1', temp], folder / 'processing.log', cancel)
+        try:
+            run_command([ffmpeg_executable(), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                '-threads', '1', '-i', source, '-af', audio_filter(offset, duration), '-c:a', 'libmp3lame',
+                '-b:a', '128k' if role == 'voice' else '192k', '-ar', '48000', '-threads', '1', temp], folder / 'processing.log', cancel)
+        except Exception as exc:
+            if cancel.is_set(): raise
+            temp.unlink(missing_ok=True)
+            warning = f'{role}: 音声を変換できませんでした。画面映像と他の素材は保存し、元音声は保持します：{exc}'
+            if warning not in take['warnings']: take['warnings'].append(warning)
+            write_take(folder, take)
+            continue
         os.replace(temp, output)
         take['files'][role] = output.name
         write_take(folder, take)
