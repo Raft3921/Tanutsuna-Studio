@@ -81,8 +81,14 @@ def latest_release() -> dict:
     asset = next((item for item in release.get("assets", []) if item.get("name") == wanted), None)
     delta_name = f"Tanutsuna-Studio-{packaged_platform()}-from-{STUDIO_VERSION}.zip"
     delta = next((item for item in release.get("assets", []) if item.get("name") == delta_name), None)
-    if delta:
+    # A Mac app delta cannot be re-signed on the user's machine because the
+    # distribution certificate's private key is only available to the builder.
+    # Applying one with an ad-hoc signature changes its TCC identity and can
+    # make macOS ask for Screen Recording permission again after every update.
+    if delta and packaged_platform() != "macOS-arm64":
         asset = delta
+    else:
+        delta = None
     if not asset:
         raise RuntimeError(f"Release {tag} に {wanted} がありません。更新を安全に適用できません。")
     digest = asset.get("digest", "")

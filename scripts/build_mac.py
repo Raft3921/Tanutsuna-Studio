@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / 'studio/version.py').read_text(encoding='utf-8').split('STUDIO_VERSION = "', 1)[1].split('"', 1)[0]
 NUMPY_VERSION = '2.5.4'
 IMAGEIO_FFMPEG_VERSION = '0.6.0'
+SIGNING_IDENTITY = os.environ.get('TANUTSUNA_CODESIGN_IDENTITY', '-').strip() or '-'
 
 def build():
     if sys.platform != 'darwin':
@@ -104,15 +105,21 @@ def build():
     # constructor when live face tracking creates its first embedded page.
     # Sign the nested code first, then the helper with Qt's shipped entitlements,
     # and finally seal its containing framework and the outer app.
-    subprocess.run(['codesign','--force','--deep','--sign','-',str(bundle)],check=True)
+    # Ad-hoc signing changes the app's TCC identity between builds. Set
+    # TANUTSUNA_CODESIGN_IDENTITY to a stable Developer ID Application
+    # identity for releases so Screen Recording permission survives updates.
+    signing_options=['--options','runtime','--timestamp'] if SIGNING_IDENTITY!='-' else []
+    if SIGNING_IDENTITY=='-':
+        print('注意: TANUTSUNA_CODESIGN_IDENTITY未設定のため、Macアプリは仮署名です。画面収録などの許可は更新後に再設定が必要になる場合があります。')
+    subprocess.run(['codesign','--force','--deep',*signing_options,'--sign',SIGNING_IDENTITY,str(bundle)],check=True)
     framework=bundle/'Contents/Frameworks/PySide6/Qt/lib/QtWebEngineCore.framework'
     helper=framework/'Versions/A/Helpers/QtWebEngineProcess.app'
     entitlements=helper/'Contents/Resources/QtWebEngineProcess.entitlements'
     if not helper.is_dir() or not entitlements.is_file():
         raise RuntimeError('QtWebEngineProcess または sandbox entitlements が見つかりません。')
-    subprocess.run(['codesign','--force','--sign','-','--entitlements',str(entitlements),str(helper)],check=True)
-    subprocess.run(['codesign','--force','--sign','-',str(framework)],check=True)
-    subprocess.run(['codesign','--force','--sign','-',str(bundle)],check=True)
+    subprocess.run(['codesign','--force',*signing_options,'--sign',SIGNING_IDENTITY,'--entitlements',str(entitlements),str(helper)],check=True)
+    subprocess.run(['codesign','--force',*signing_options,'--sign',SIGNING_IDENTITY,str(framework)],check=True)
+    subprocess.run(['codesign','--force',*signing_options,'--sign',SIGNING_IDENTITY,str(bundle)],check=True)
     print('Mac検証用アプリ: ' + str(ROOT / 'dist/Tanutsuna Studio.app'))
 
 if __name__ == '__main__':

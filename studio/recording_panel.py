@@ -25,20 +25,28 @@ class RecordingPanel(QWidget):
         self.awaiting_camera=False;self.owns_camera=False;self.pending_options=None
         self.entries = []
         self.refreshing = False
+        saved_settings=self.desk.workspace.data.get('preferences',{}).get('recording',{})
         layout = QVBoxLayout(self);layout.setContentsMargins(26,24,26,22);layout.setSpacing(14)
         heading = QLabel('録画');heading.setObjectName('PageTitle');layout.addWidget(heading)
         title = QLabel('画面全体を1080p・50fpsで収録。PC音とマイクは別々のMP3へ保存します。')
         title.setWordWrap(True); layout.addWidget(title)
         row = QHBoxLayout(); self.displays = QComboBox()
         for index, screen in enumerate(QGuiApplication.screens()): self.displays.addItem(f'{index+1}: {screen.name()} {screen.size().width()}×{screen.size().height()}', index)
+        preferred_display=saved_settings.get('display_name','')
+        if preferred_display:
+            display_index=self.displays.findText(preferred_display)
+            if display_index>=0:self.displays.setCurrentIndex(display_index)
         row.addWidget(QLabel('画面')); row.addWidget(self.displays, 1)
         self.mics = QComboBox(); self.mics.addItem('標準のマイク', '')
         for device in QMediaDevices.audioInputs(): self.mics.addItem(device.description(), bytes(device.id()).decode(errors='replace'))
+        preferred_mic=saved_settings.get('mic_id','')
+        mic_index=next((i for i in range(self.mics.count()) if self.mics.itemData(i)==preferred_mic),0)
+        self.mics.setCurrentIndex(mic_index)
         row.addWidget(QLabel('マイク')); row.addWidget(self.mics, 1); layout.addLayout(row)
         row = QHBoxLayout()
-        self.desktop = QCheckBox('ゲーム・PC音'); self.desktop.setChecked(True)
-        self.voice = QCheckBox('マイク'); self.voice.setChecked(True)
-        self.avatar = QCheckBox('V体も別素材に保存'); self.avatar.setChecked(True)
+        self.desktop = QCheckBox('ゲーム・PC音'); self.desktop.setChecked(bool(saved_settings.get('desktop',True)))
+        self.voice = QCheckBox('マイク'); self.voice.setChecked(bool(saved_settings.get('voice',True)))
+        self.avatar = QCheckBox('V体も別素材に保存'); self.avatar.setChecked(bool(saved_settings.get('avatar',True)))
         for widget in (self.desktop, self.voice, self.avatar): row.addWidget(widget)
         layout.addLayout(row)
         note = QLabel('V体のカメラは収録開始時に自動準備します（初回のOS許可は必要です）。収録中は動きだけを記録し、映像化は終了後に処理し、全素材を編集の右端へ追加します。PC音には通知なども含みます。')
@@ -78,7 +86,22 @@ class RecordingPanel(QWidget):
         self.pose_timer = QTimer(self); self.pose_timer.setInterval(40); self.pose_timer.timeout.connect(self.save_pose)
         self.progress_timer = QTimer(self);self.progress_timer.setInterval(500);self.progress_timer.timeout.connect(self.show_save_progress)
         self.camera_timer=QTimer(self);self.camera_timer.setInterval(150);self.camera_timer.timeout.connect(self.check_camera)
+        self.preferences_timer=QTimer(self);self.preferences_timer.setSingleShot(True);self.preferences_timer.setInterval(400);self.preferences_timer.timeout.connect(self.save_preferences)
+        self.displays.currentIndexChanged.connect(self.schedule_preferences_save);self.mics.currentIndexChanged.connect(self.schedule_preferences_save)
+        for widget in (self.desktop,self.voice,self.avatar):widget.toggled.connect(self.schedule_preferences_save)
         self.update_buttons()
+
+    def schedule_preferences_save(self,*_):
+        self.preferences_timer.start()
+
+    def save_preferences(self):
+        preferences=self.desk.workspace.data.setdefault('preferences',{})
+        preferences['recording']={
+            'display_name':self.displays.currentText(), 'mic_id':self.mics.currentData() or '',
+            'desktop':self.desktop.isChecked(), 'voice':self.voice.isChecked(),
+            'avatar':self.avatar.isChecked(),
+        }
+        self.desk.workspace.save()
 
     def show_save_progress(self):
         if not self.folder or not self.jobs.busy:return
@@ -336,4 +359,4 @@ class RecordingPanel(QWidget):
         return True
 
     def shutdown(self):
-        self.camera_timer.stop();self.progress_timer.stop();self.end_motion(); self.jobs.shutdown()
+        self.preferences_timer.stop();self.save_preferences();self.camera_timer.stop();self.progress_timer.stop();self.end_motion(); self.jobs.shutdown()

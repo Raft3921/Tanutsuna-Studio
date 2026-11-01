@@ -79,6 +79,7 @@ class YouTubePanel(QWidget):
         row = QHBoxLayout()
         self.video_url = QLineEdit(saved.get('video_url', ''))
         self.video_url.setPlaceholderText('YouTubeライブ配信URL')
+        self.video_url.editingFinished.connect(self.save_video_url)
         self.connect_button = QPushButton('接続')
         self.connect_button.clicked.connect(self.connect_chat)
         row.addWidget(self.video_url, 1)
@@ -99,6 +100,8 @@ class YouTubePanel(QWidget):
         except OSError:
             pass
         layout.addWidget(self.remember_api_key)
+        self.api_key.textEdited.connect(self.save_api_key)
+        self.remember_api_key.toggled.connect(self.save_api_key)
         self.chat_stack = QStackedWidget()
         self.placeholder = QTextBrowser()
         self.placeholder.setOpenExternalLinks(False)
@@ -111,6 +114,25 @@ class YouTubePanel(QWidget):
         self.refresh_timer.start()
         if saved.get('video_url'):
             QTimer.singleShot(150,self.connect_chat)
+
+    def save_video_url(self):
+        live=self.workspace.data.setdefault('live',{})
+        live['video_url']=self.video_url.text().strip()
+        self.workspace.save()
+
+    def save_api_key(self,*_):
+        from .credentials import youtube_api_key
+        value=self.api_key.text().strip()
+        try:
+            if self.remember_api_key.isChecked() and value:
+                youtube_api_key('set',value);self.secret_api_loaded=True
+            elif self.remember_api_key.isChecked() and self.secret_api_loaded:
+                youtube_api_key('delete');self.secret_api_loaded=False
+            elif not self.remember_api_key.isChecked() and self.secret_api_loaded:
+                youtube_api_key('delete');self.secret_api_loaded=False
+        except OSError:
+            self.viewer_count.setText('APIキーを安全に保存できませんでした。OSのキーチェーン設定を確認してください。')
+            self.remember_api_key.blockSignals(True);self.remember_api_key.setChecked(False);self.remember_api_key.blockSignals(False)
 
     def connect_chat(self):
         video_id = video_id_from_url(self.video_url.text())

@@ -18,6 +18,7 @@ from .jobs import Jobs
 class LivePanel(QWidget):
     def __init__(self,desk):
         super().__init__(desk);self.desk=desk;self.engine=LiveEngine(self);self.audio=None;self.preparing=False;self.previewing=False;self.pending_start=False
+        saved=desk.workspace.data.get('live',{});self.saved_preferences=saved.get('preferences',{})
         self.camera_owned=False;self.game=None;self.renderer=None;self.cached_avatar=None;self.target=None;self.audio_ready=False;self.project=None;self.record_started=False;self.tick_count=0
         self.jobs=Jobs(self);self.jobs.finished.connect(self.saved)
         from .window_source import NativeWindowSource
@@ -29,38 +30,46 @@ class LivePanel(QWidget):
         title=QLabel('ライブ配信');title.setObjectName('PageTitle');outer.addWidget(title)
         top=QHBoxLayout();self.windows=QComboBox();self.windows.setPlaceholderText('取得するゲームのウィンドウ');self.windows.setMinimumWidth(220);self.windows.currentIndexChanged.connect(self.choose_window);self.windows.currentIndexChanged.connect(self.update_buttons)
         refresh=QPushButton('ウィンドウを更新');refresh.clicked.connect(self.refresh_windows)
-        self.quality=QComboBox();self.quality.addItem('標準 1080p / 60fps',(1920,1080));self.quality.addItem('軽量 720p / 60fps',(1280,720));self.quality.setCurrentIndex(1)
+        self.quality=QComboBox();self.quality.addItem('標準 1080p / 60fps',(1920,1080));self.quality.addItem('軽量 720p / 60fps',(1280,720));self.quality.setCurrentIndex(max(0,min(1,int(self.saved_preferences.get('quality',1)))))
         self.background_image=QImage(str(Path(__file__).parent/'assets'/'live-studio-background.png'))
         self.background_frame=QImage();self.quality.currentIndexChanged.connect(self.prepare_background);self.prepare_background()
         for widget in (self.windows,refresh,self.quality):top.addWidget(widget)
         outer.addLayout(top)
         body=QHBoxLayout()
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setMinimumWidth(265);scroll.setMaximumWidth(370);controls=QWidget();settings=QVBoxLayout(controls)
-        self.avatar=QCheckBox('V体を重ねる');self.avatar.setChecked(True);settings.addWidget(self.avatar)
+        self.avatar=QCheckBox('V体を重ねる');self.avatar.setChecked(bool(self.saved_preferences.get('avatar',True)));settings.addWidget(self.avatar)
         self.scenes_button=QPushButton('シーンを切り替える');self.scenes_button.clicked.connect(self.open_scenes_window);settings.addWidget(self.scenes_button)
         from .camera_choice import CameraChoice
         self.camera_choice=CameraChoice(self);settings.addWidget(QLabel('V体を動かすカメラ'));settings.addWidget(self.camera_choice)
         form=QFormLayout();self.transforms={};self.transform_sliders={}
         for key,title,value in [('x','左右の位置',80),('y','上下の位置',75),('size','V体の大きさ',25)]:
-            field=QDoubleSpinBox();field.setRange(0,100) if key!='size' else field.setRange(10,60);field.setDecimals(1);field.setSingleStep(.5);field.setValue(value);field.setSuffix(' %');self.transforms[key]=field;form.addRow(title,field)
-            slider=QSlider(Qt.Orientation.Horizontal);slider.setRange((100 if key=='size' else 0),(600 if key=='size' else 1000));slider.setSingleStep(5);slider.setPageStep(50);slider.setValue(round(value*10));slider.setToolTip(f'{title}をスライダーで調整')
+            field=QDoubleSpinBox();field.setRange(0,100) if key!='size' else field.setRange(10,60);field.setDecimals(1);field.setSingleStep(.5);field.setValue(float(self.saved_preferences.get('transform_'+key,value)));field.setSuffix(' %');self.transforms[key]=field;form.addRow(title,field)
+            slider=QSlider(Qt.Orientation.Horizontal);slider.setRange((100 if key=='size' else 0),(600 if key=='size' else 1000));slider.setSingleStep(5);slider.setPageStep(50);slider.setValue(round(field.value()*10));slider.setToolTip(f'{title}をスライダーで調整')
             slider.valueChanged.connect(lambda n, field=field: field.setValue(n/10))
             field.valueChanged.connect(lambda n, slider=slider: self.sync_transform_slider(slider,n))
             self.transform_sliders[key]=slider;form.addRow(slider)
         settings.addLayout(form)
         microw=QHBoxLayout();microw.addWidget(QLabel('マイク'));self.mics=QComboBox();self.mics.addItem('標準のマイク',b'')
         for device in QMediaDevices.audioInputs():self.mics.addItem(device.description(),bytes(device.id()))
+        saved_mic=self.saved_preferences.get('mic_id','')
+        mic_index=next((i for i in range(self.mics.count()) if bytes(self.mics.itemData(i) or b'').decode(errors='replace')==saved_mic),0)
+        self.mics.setCurrentIndex(mic_index)
         microw.addWidget(self.mics);settings.addLayout(microw)
         self.gains={};self.mutes={};self.meters={}
         for role,title,initial in [('desktop','PC全体',75),('voice','マイク',100),('bgm','BGM',20),('sfx','効果音',75)]:
-            row=QHBoxLayout();row.addWidget(QLabel(title));gain=QDoubleSpinBox();gain.setRange(0,100);gain.setValue(initial);gain.setSuffix(' %')
-            mute=QCheckBox('消音');row.addWidget(gain);row.addWidget(mute);settings.addLayout(row)
+            row=QHBoxLayout();row.addWidget(QLabel(title));gain=QDoubleSpinBox();gain.setRange(0,100);gain.setValue(float(self.saved_preferences.get('gain_'+role,initial)));gain.setSuffix(' %')
+            mute=QCheckBox('消音');mute.setChecked(bool(self.saved_preferences.get('mute_'+role,False)));row.addWidget(gain);row.addWidget(mute);settings.addLayout(row)
             meter=QProgressBar();meter.setRange(0,100);meter.setTextVisible(False);meter.setFixedHeight(8);settings.addWidget(meter)
             self.gains[role]=gain;self.mutes[role]=mute;self.meters[role]=meter
             if role=='voice':
                 self.voice_gate_indicator=QLabel();self.voice_gate_indicator.setStyleSheet('font-size:11px;color:#63818a');settings.addWidget(self.voice_gate_indicator)
             gain.valueChanged.connect(self.update_mix);mute.toggled.connect(self.update_mix)
-        self.bgm=QComboBox();self.bgm.addItem('BGMなし','');settings.addWidget(self.bgm)
+        self.bgm=QComboBox();self.bgm.addItem('BGMなし','')
+        for file in self.saved_preferences.get('bgm_files',[]):
+            if isinstance(file,str) and Path(file).is_file():self.bgm.addItem(Path(file).name,file)
+        saved_bgm=self.saved_preferences.get('bgm_file','')
+        if saved_bgm and Path(saved_bgm).is_file():self.bgm.setCurrentIndex(max(0,self.bgm.findData(saved_bgm)))
+        settings.addWidget(self.bgm)
         add=QPushButton('BGMのMP3候補を追加');add.clicked.connect(self.add_bgm);settings.addWidget(add)
         row=QHBoxLayout();play=QPushButton('BGMを再生');play.clicked.connect(self.play_bgm);stop=QPushButton('BGMを停止');stop.clicked.connect(lambda:self.engine.files['bgm'].close());row.addWidget(play);row.addWidget(stop);settings.addLayout(row)
         effect=QPushButton('効果音を選んで流す');effect.clicked.connect(self.play_effect);settings.addWidget(effect)
@@ -75,8 +84,8 @@ class LivePanel(QWidget):
         from .youtube_panel import YouTubePanel
         self.youtube_panel=YouTubePanel(desk.workspace);self.youtube_panel.setMinimumWidth(280);self.youtube_panel.setMaximumWidth(430);body.addWidget(self.youtube_panel,3)
         outer.addLayout(body,1)
-        self.record=QCheckBox('同時に録画して、終了後に編集へ保存する');self.record.setChecked(False);outer.addWidget(self.record)
-        saved=desk.workspace.data.get('live',{});form=QFormLayout();saved_server=saved.get('server')
+        self.record=QCheckBox('同時に録画して、終了後に編集へ保存する');self.record.setChecked(bool(self.saved_preferences.get('record',False)));outer.addWidget(self.record)
+        form=QFormLayout();saved_server=saved.get('server')
         # Older releases rewrote Studio's plain-RTMP URL to RTMPS. Restore the
         # exact URL shown in Studio for that known default so TLS is not forced.
         if saved_server in ('rtmps://a.rtmps.youtube.com:443/live2','rtmps://a.rtmps.youtube.com/live2'):
@@ -85,6 +94,8 @@ class LivePanel(QWidget):
         self.key=QLineEdit();self.key.setEchoMode(QLineEdit.EchoMode.Password);self.key.setPlaceholderText('YouTube Studioのストリームキー')
         self.key.textChanged.connect(self.update_buttons)
         self.remember=QCheckBox('キーをOSの資格情報ストアへ保存する');self.secret_loaded=False
+        self.key.textEdited.connect(self.save_stream_secret)
+        self.remember.toggled.connect(self.save_stream_secret)
         form.addRow('ストリームURL',self.server);form.addRow('ストリームキー',self.key);outer.addLayout(form)
         outer.addWidget(QLabel('Studioに表示されたURLをそのまま使います。暗号化する場合は鍵アイコンからRTMPS URLをコピーしてください。RTMPは暗号化されません。'))
         outer.addWidget(self.remember)
@@ -102,11 +113,34 @@ class LivePanel(QWidget):
         # Compose each source frame at the fixed 60fps output cadence.
         self.timer=QTimer(self);self.timer.setTimerType(Qt.TimerType.PreciseTimer);self.timer.setInterval(16);self.timer.timeout.connect(self.tick)
         self.monitor=QTimer(self);self.monitor.setInterval(1000);self.monitor.timeout.connect(self.monitor_window);self.monitor.start()
-        self.refresh_windows();self.update_mix();self.update_buttons()
+        self.preferences_timer=QTimer(self);self.preferences_timer.setSingleShot(True);self.preferences_timer.setInterval(400);self.preferences_timer.timeout.connect(self.save_preferences)
+        for widget in (self.windows,self.quality,self.mics,self.bgm):widget.currentIndexChanged.connect(self.schedule_preferences_save)
+        for widget in (self.avatar,self.record,*self.mutes.values()):widget.toggled.connect(self.schedule_preferences_save)
+        for widget in (*self.transforms.values(),*self.gains.values()):widget.valueChanged.connect(self.schedule_preferences_save)
+        self.server.textChanged.connect(self.schedule_preferences_save)
+        self.refresh_windows();self.update_mix();self.update_buttons();QTimer.singleShot(0,self.load_secret)
         if self.windows.currentData() is None:self.status.setText('先にゲームのウィンドウを選択してください。映像確認にYouTubeキーは不要です。')
 
     @property
     def busy(self):return self.preparing or self.engine.active or self.jobs.busy
+
+    def schedule_preferences_save(self,*_):
+        self.preferences_timer.start()
+
+    def save_preferences(self):
+        live=self.desk.workspace.data.setdefault('live',{})
+        live['server']=self.server.text().strip()
+        live['preferences']={
+            'quality':self.quality.currentIndex(),'avatar':self.avatar.isChecked(),
+            **{'transform_'+name:field.value() for name,field in self.transforms.items()},
+            'mic_id':bytes(self.mics.currentData() or b'').decode(errors='replace'),
+            **{'gain_'+role:gain.value() for role,gain in self.gains.items()},
+            **{'mute_'+role:mute.isChecked() for role,mute in self.mutes.items()},
+            'bgm_files':[self.bgm.itemData(i) for i in range(1,self.bgm.count()) if self.bgm.itemData(i)],
+            'bgm_file':self.bgm.currentData() or '', 'record':self.record.isChecked(),
+            'window_title':self.windows.currentText() if self.windows.currentData() is not None else '',
+        }
+        self.desk.workspace.save()
 
     def prepare_background(self,*_):
         if self.background_image.isNull():
@@ -151,6 +185,17 @@ class LivePanel(QWidget):
             if not self.key.text():self.key.setText(value);self.remember.setChecked(bool(value))
         except OSError:self.status.setText('保存したキーを取得できません。必要なら今回だけ入力して配信できます。')
 
+    def save_stream_secret(self,*_):
+        try:
+            if self.remember.isChecked() and self.key.text().strip():
+                from .credentials import stream_key
+                stream_key('set',self.key.text().strip());self.secret_loaded=True
+            elif not self.remember.isChecked() and self.secret_loaded:
+                from .credentials import stream_key
+                stream_key('delete');self.secret_loaded=False
+        except OSError:
+            self.status.setText('ストリームキーを安全に保存できませんでした。OSのキーチェーン設定を確認してください。')
+
     def refresh_windows(self):
         if self.native_source.available:
             self.native_source.enumerate();return
@@ -170,7 +215,9 @@ class LivePanel(QWidget):
             # Some PySide wheels omit QCapturableWindow's value equality. Retain
             # the original native handle; never reselect by title or list position.
             self.windows.insertItem(0,'選択中: '+previous.description(),previous);index=0
-        if previous is None and self.windows.count():index=0
+        if previous is None and self.windows.count():
+            preferred=self.saved_preferences.get('window_title','')
+            index=next((i for i in range(self.windows.count()) if self.windows.itemText(i)==preferred),0)
         self.windows.setCurrentIndex(index);self.windows.blockSignals(False)
         if self.target is None and index>=0:self.target=self.windows.currentData()
 
@@ -395,6 +442,7 @@ class LivePanel(QWidget):
         known={self.bgm.itemData(i) for i in range(self.bgm.count())}
         for file in files:
             if file not in known:self.bgm.addItem(Path(file).name,file)
+        if files:self.schedule_preferences_save()
 
     def play_bgm(self):
         file=self.bgm.currentData()
@@ -484,4 +532,4 @@ class LivePanel(QWidget):
         self.stop_preview();return True
 
     def shutdown(self):
-        self.stop_preview();self.timer.stop();self.monitor.stop();self.engine.shutdown();self.jobs.shutdown()
+        self.preferences_timer.stop();self.save_preferences();self.stop_preview();self.timer.stop();self.monitor.stop();self.engine.shutdown();self.jobs.shutdown()
