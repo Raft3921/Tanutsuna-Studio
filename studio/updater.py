@@ -549,10 +549,15 @@ exit 2
         helper = work / "install-update.ps1"
         helper.write_text(r'''param($Target,$Stage,$Backup,$Marker,$Token,[int]$Pid,[string]$Work,[string]$Delta)
 $ErrorActionPreference = 'Stop'
+$Log = Join-Path $env:LOCALAPPDATA 'TanutsunaStudio\update-install.log'
+function Write-UpdateLog([string]$Message) {
+  try { Add-Content -LiteralPath $Log -Encoding UTF8 -Value ((Get-Date -Format o) + ' ' + $Message) } catch {}
+}
 $deadline = (Get-Date).AddSeconds(90)
 while ((Get-Process -Id $Pid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
 if ($Delta -eq 'true') {
-  $Manifest = Get-Content -LiteralPath (Join-Path $Stage 'delta-manifest.json') -Raw | ConvertFrom-Json
+  try { $Manifest = Get-Content -LiteralPath (Join-Path $Stage 'delta-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json }
+  catch { Write-UpdateLog ("差分マニフェスト読込失敗: " + $_.Exception.Message); throw }
   $Done = [System.Collections.Generic.List[object]]::new()
   try {
     New-Item -ItemType Directory -Force -Path $Backup | Out-Null
@@ -588,8 +593,9 @@ if ($Delta -eq 'true') {
       if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -like "*$Token*")) { Remove-Item $Backup,$Work -Recurse -Force -ErrorAction SilentlyContinue; exit 0 }
       Start-Sleep -Seconds 1
     }
-    throw 'Updated app did not report successful startup'
+    throw 'Updated app did not report successful startup within 90 seconds'
   } catch {
+    Write-UpdateLog ("差分適用失敗。旧版へ復元します: " + $_.Exception.Message)
     for ($i = $Done.Count - 1; $i -ge 0; $i--) {
       $Item = $Done[$i]
       $Dest = Join-Path $Target $Item.Path
@@ -608,6 +614,7 @@ if ($Delta -eq 'true') {
     }
     Remove-Item $Backup,$Work -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path (Join-Path $Target 'Tanutsuna Studio.exe')) { Start-Process (Join-Path $Target 'Tanutsuna Studio.exe') }
+    Write-UpdateLog '旧版を復元して起動しました。'
     exit 2
   }
 }
@@ -622,13 +629,15 @@ try {
     if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -like "*$Token*")) { Remove-Item $Backup,$Work -Recurse -Force; exit 0 }
     Start-Sleep -Seconds 1
   }
-  throw 'Updated app did not report successful startup'
+  throw 'Updated app did not report successful startup within 90 seconds'
 } catch {
+  Write-UpdateLog ("完全版適用失敗。旧版へ復元します: " + $_.Exception.Message)
   if (Test-Path $Backup) {
     if (Test-Path $Target) { Remove-Item $Target -Recurse -Force }
     Move-Item -LiteralPath $Backup -Destination $Target
   }
   if (Test-Path (Join-Path $Target 'Tanutsuna Studio.exe')) { Start-Process (Join-Path $Target 'Tanutsuna Studio.exe') }
+  Write-UpdateLog '旧版を復元して起動しました。'
   exit 2
 }
 ''', encoding="utf-8")
