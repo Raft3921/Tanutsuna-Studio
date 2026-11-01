@@ -3,7 +3,9 @@ from pathlib import Path
 import json
 import os
 import sys
+import tempfile
 import time
+import uuid
 import wave
 import struct
 from PySide6.QtCore import QObject, QProcess, QTimer, QSize, QUrl, Signal, QIODevice
@@ -89,6 +91,10 @@ class Recorder(QObject):
         self.state = 'idle'
         self.folder = self.take = None
         self.process = None
+        self.stop_signal = None
+        self.stop_deadline = None
+        self.audio_force_stopped = False
+        self.audio_repaired = False
         self.session = self.capture = self.encoder = self.sink = None
         self.mic = Microphone(self)
         self.lines = b''
@@ -111,6 +117,11 @@ class Recorder(QObject):
     def update_stop_status(self):
         if self.state != 'stopping':
             return
+        if (self.process and self.process.state() != QProcess.ProcessState.NotRunning
+                and self.stop_deadline is not None and time.monotonic() >= self.stop_deadline):
+            self.force_stop_desktop_audio()
+            if self.state != 'stopping':
+                return
         waiting = []
         if self.encoder and self.encoder.recorderState() != QMediaRecorder.RecorderState.StoppedState:
             waiting.append('画面動画の確定')
@@ -136,6 +147,8 @@ class Recorder(QObject):
         if self.process is not None:
             self.process.deleteLater(); self.process = None
         self.folder, self.take = create_take(project, options,temporary=True)
+        self.stop_signal = None; self.stop_deadline = None
+        self.audio_force_stopped = False; self.audio_repaired = False
         self.capture_log(f'収録準備開始。設定={options!r}')
         self.lines = b''; self.stop_requested = False; self.preserve_capture = False
         self.take['timestamps'] = {}
@@ -152,6 +165,8 @@ class Recorder(QObject):
         self.process = QProcess(self)
         self.process.setProgram(str(program)); self.process.setArguments([str(a) for a in arguments])
         self.capture_log('PC音録音ヘルパーを起動します。')
+        if sys.platform == 'win32' and len(arguments) > 1:
+            self.capture_log('停止ファイル: ' + str(arguments[1]))
         self.process.setStandardErrorFile(str(self.folder / 'capture.log'), QIODevice.OpenModeFlag.Append)
         self.process.readyReadStandardOutput.connect(self.read_messages)
         self.process.errorOccurred.connect(lambda e: self.abort(self.process.errorString()) if e == QProcess.ProcessError.FailedToStart else None)
@@ -200,6 +215,8 @@ class Recorder(QObject):
             import hashlib
             signature = hashlib.sha256((NATIVE / 'Loopback.cs').read_bytes()).hexdigest()[:16]
             helper = cache / ('loopback-' + signature + '.exe')
+            self.stop_signal = Path(tempfile.gettempdir()) / ('tanutsuna-stop-' + uuid.uuid4().hex + '.signal')
+            helper_args = [self.folder / 'desktop-source.wav', self.stop_signal]
             if not helper.is_file():
                 self.compiler = QProcess(self)
                 self.compiler.setProgram(str(Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'))
@@ -209,11 +226,11 @@ class Recorder(QObject):
                 self.compiler.setStandardOutputFile(str(compiler_log), QIODevice.OpenModeFlag.Append)
                 self.compiler.setStandardErrorFile(str(compiler_log), mode=QIODevice.OpenModeFlag.Append)
                 self.compiler.errorOccurred.connect(lambda _: self.abort('Windows内蔵コンパイラを起動できません。'))
-                self.compiler.finished.connect(lambda code, _: self.child(helper, [self.folder / 'desktop-source.wav']) if code == 0 and self.state == 'preparing' else self.abort('PC音エンジンを準備できません。compiler.logを確認してください。'))
+                self.compiler.finished.connect(lambda code, _: self.child(helper, helper_args) if code == 0 and self.state == 'preparing' else self.abort('PC音エンジンを準備できません。compiler.logを確認してください。'))
                 self.compiler.start()
             else:
                 (self.folder / 'compiler.log').write_text('キャッシュ済みのPC音録音ヘルパーを使用します。\n', encoding='utf-8')
-                self.child(helper, [self.folder / 'desktop-source.wav'])
+                self.child(helper, helper_args)
         else: self.begin_video()
 
     def begin_video(self):
@@ -261,6 +278,47 @@ class Recorder(QObject):
         self.take['state'] = 'recording'; write_take(self.folder, self.take)
         self.set_state('recording'); self.started.emit(self.folder, self.take)
 
+    def remove_stop_signal(self):
+        if self.stop_signal:
+            try: self.stop_signal.unlink(missing_ok=True)
+            except OSError: pass
+
+    def repair_desktop_source(self):
+        if self.audio_repaired or sys.platform != 'win32' or not self.take.get('options', {}).get('desktop'):
+            return self.audio_repaired
+        source = self.folder / 'desktop-source.wav'
+        self.audio_repaired = repair_loopback_rf64(source)
+        if self.audio_repaired:
+            self.capture_log('PC音の一時RF64ヘッダーを修復し、取得済み音声を保持しました。')
+            warning = 'PC音の終了に時間がかかったため、取得済みの音声ファイルを修復しました。'
+            if warning not in self.take['warnings']: self.take['warnings'].append(warning)
+            write_take(self.folder, self.take)
+        else:
+            self.capture_log('停止したPC音ファイルのRF64ヘッダーを修復できませんでした。')
+        return self.audio_repaired
+
+    def force_stop_desktop_audio(self):
+        if not self.process or self.process.state() == QProcess.ProcessState.NotRunning:
+            self.stop_deadline = None
+            return
+        if not self.audio_force_stopped:
+            self.audio_force_stopped = True
+            self.capture_log('停止ファイル後もPC音ヘルパーが終了しないため、音声プロセスを安全に打ち切ります。')
+            warning = 'PC音ヘルパーが停止期限を超えました。画面映像と他の素材は保存します。'
+            if warning not in self.take['warnings']:
+                self.take['warnings'].append(warning)
+                write_take(self.folder, self.take)
+        self.process.kill()
+        finished = self.process.waitForFinished(3000)
+        if finished:
+            self.stop_deadline = None
+            self.repair_desktop_source()
+            self.remove_stop_signal()
+            self.finish_windows_if_ready()
+        else:
+            self.capture_log('PC音ヘルパーが強制終了後も3秒以内に閉じませんでした。')
+            self.stop_deadline = time.monotonic() + 3
+
     def stop(self):
         if self.state != 'recording': return
         self.take['duration'] = max(.02, time.perf_counter() - self.epoch)
@@ -273,10 +331,15 @@ class Recorder(QObject):
         finalize_timeout=max(120000,min(600000,120000+int(self.take['duration']*250)))
         self.timeout.start(finalize_timeout)
         if sys.platform == 'win32':
+            if self.process and self.process.state() == QProcess.ProcessState.Running and self.stop_signal:
+                self.stop_deadline = time.monotonic() + 10
+                try:
+                    self.stop_signal.write_text('stop\n', encoding='ascii')
+                    self.capture_log('一時停止ファイルを作成し、PC音ヘルパーへ停止信号を送りました。')
+                except OSError as exc:
+                    self.capture_log('停止ファイルを作れません: ' + str(exc))
+                    self.stop_deadline = time.monotonic()
             self.update_stop_status(); self.stop_watch.start()
-        if self.process and self.process.state() == QProcess.ProcessState.Running:
-            sent = self.process.write(b'stop\n'); self.capture_log(f'PC音停止信号を送信。queued={sent} bytes')
-            self.process.closeWriteChannel()
         if sys.platform == 'win32':
             self.mic.stop()
             if self.mic.first is not None: self.take['timestamps']['voice'] = self.mic.first
@@ -288,7 +351,13 @@ class Recorder(QObject):
 
     def child_finished(self, code, status):
         self.capture_log(f'録音ヘルパー終了。code={code}, status={status}')
+        self.stop_deadline = None
+        self.remove_stop_signal()
         if self.state == 'failed': self.cleanup_pending();return
+        if self.audio_force_stopped and sys.platform == 'win32':
+            self.repair_desktop_source()
+            self.finish_windows_if_ready()
+            return
         if code != 0 or status != QProcess.ExitStatus.NormalExit:
             self.abort('収録エンジンが停止しました。capture.logを確認してください。'); return
         if self.state != 'stopping':
@@ -304,6 +373,7 @@ class Recorder(QObject):
 
     def complete(self):
         self.timeout.stop(); self.stop_watch.stop()
+        self.stop_deadline = None; self.remove_stop_signal()
         self.capture_log('画面動画と音声ヘルパーの終了を確認しました。')
         self.take['state'] = 'captured'
         write_take(self.folder, self.take)
@@ -333,15 +403,11 @@ class Recorder(QObject):
         if self.process:
             self.process.kill()
             finished = self.process.waitForFinished(3000)
-            if sys.platform == 'win32' and self.take.get('options', {}).get('desktop') and finished:
-                source = self.folder / 'desktop-source.wav'
-                audio_repaired = repair_loopback_rf64(source)
-                if audio_repaired:
-                    self.capture_log('PC音の一時RF64ヘッダーを修復し、取得済み音声を保持しました。')
-                else:
-                    self.capture_log('PC音ヘルパー停止後、修復可能なRF64音声はありませんでした。')
+            if finished:
+                audio_repaired = self.repair_desktop_source()
             elif sys.platform == 'win32' and self.take.get('options', {}).get('desktop'):
                 self.capture_log('PC音ヘルパーが3秒以内に終了しませんでした。')
+        self.remove_stop_signal(); self.stop_deadline = None
         if hasattr(self, 'compiler'): self.compiler.kill()
         if self.encoder: self.encoder.stop()
         if self.capture: self.capture.setActive(False)

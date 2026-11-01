@@ -39,7 +39,6 @@ interface IAudioCaptureClient {
     [PreserveSig] int GetNextPacketSize(out uint frames);
 }
 class Loopback {
-    static volatile bool stopping;
     static void Check(int hr) { Marshal.ThrowExceptionForHR(hr); }
     static void Log(string message) {
         Console.Error.WriteLine(DateTime.UtcNow.ToString("o") + " " + message);
@@ -52,7 +51,8 @@ class Loopback {
     public static int Main(string[] args) {
         try {
             Log("PC音録音ヘルパーを開始しました。");
-            if (args.Length < 1) throw new Exception("Output WAV path required");
+            if (args.Length < 2) throw new Exception("Output WAV path and stop-signal path required");
+            string stopPath = args[1];
             IMMDevice device;
             var enumerator = (IMMDeviceEnumerator)new EnumeratorClass();
             Check(enumerator.GetDefaultAudioEndpoint(0, 0, out device));
@@ -84,19 +84,14 @@ class Loopback {
                     long dataStart = file.Position, writtenFrames = 0;
                     double epoch = (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
                     Check(client.Start());
-                    Log("WASAPIループバックを開始しました。停止信号を待っています。");
+                    Log("WASAPIループバックを開始しました。停止ファイルを監視しています。");
                     Console.WriteLine("{\"type\":\"ready\",\"role\":\"desktop\",\"pts\":" + epoch.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "}");
-                    new Thread(delegate() {
-                        string command = Console.ReadLine();
-                        stopping = true;
-                        Log("停止信号を受信しました。" + (command == null ? "入力チャネル終了" : command));
-                    }) { IsBackground = true }.Start();
-                    while (!stopping) {
+                    while (!File.Exists(stopPath)) {
                         ready.WaitOne(100);
                         uint packets; Check(capture.GetNextPacketSize(out packets));
                         // Keep draining while packets are available during recording, but
                         // never let a continuously busy render device starve the stop signal.
-                        while (packets > 0 && !stopping) {
+                        while (packets > 0 && !File.Exists(stopPath)) {
                             IntPtr data; uint frames, flags; ulong position, qpc;
                             Check(capture.GetBuffer(out data, out frames, out flags, out position, out qpc));
                             try {
@@ -114,7 +109,7 @@ class Loopback {
                             Check(capture.GetNextPacketSize(out packets));
                         }
                     }
-                    Log("音声パケットの取り込みを終了します。");
+                    Log("停止ファイルを検出し、音声パケットの取り込みを終了します。");
                     Check(client.Stop());
                     Log("WASAPIを停止しました。RF64ヘッダーを確定します。");
                     // Default render endpoints may send no packets during silence.
