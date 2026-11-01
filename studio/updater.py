@@ -547,14 +547,16 @@ exit 2
     else:
         candidate = stage
         helper = work / "install-update.ps1"
-        helper.write_text(r'''param($Target,$Stage,$Backup,$Marker,$Token,[int]$Pid,[string]$Work,[string]$Delta)
+        helper.write_text(r'''param($Target,$Stage,$Backup,$Marker,$Token,[int]$ParentProcessId,[string]$Work,[string]$Delta)
 $ErrorActionPreference = 'Stop'
 $Log = Join-Path $env:LOCALAPPDATA 'TanutsunaStudio\update-install.log'
+try { New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Log) | Out-Null } catch {}
 function Write-UpdateLog([string]$Message) {
   try { Add-Content -LiteralPath $Log -Encoding UTF8 -Value ((Get-Date -Format o) + ' ' + $Message) } catch {}
 }
+Write-UpdateLog ("更新ヘルパー開始。delta=$Delta; parent=$ParentProcessId")
 $deadline = (Get-Date).AddSeconds(90)
-while ((Get-Process -Id $Pid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+while ((Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
 if ($Delta -eq 'true') {
   try { $Manifest = Get-Content -LiteralPath (Join-Path $Stage 'delta-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json }
   catch { Write-UpdateLog ("差分マニフェスト読込失敗: " + $_.Exception.Message); throw }
@@ -587,10 +589,11 @@ if ($Delta -eq 'true') {
         $Entry.Updated = $true
       }
     }
+    Write-UpdateLog '差分ファイルを適用しました。更新版を起動します。'
     Start-Process -FilePath (Join-Path $Target 'Tanutsuna Studio.exe') -ArgumentList @('--update-token',$Token)
     $deadline = (Get-Date).AddSeconds(90)
     while ((Get-Date) -lt $deadline) {
-      if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -like "*$Token*")) { Remove-Item $Backup,$Work -Recurse -Force -ErrorAction SilentlyContinue; exit 0 }
+      if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -like "*$Token*")) { Write-UpdateLog '更新版の起動を確認しました。'; Remove-Item $Backup,$Work -Recurse -Force -ErrorAction SilentlyContinue; exit 0 }
       Start-Sleep -Seconds 1
     }
     throw 'Updated app did not report successful startup within 90 seconds'
@@ -619,14 +622,16 @@ if ($Delta -eq 'true') {
   }
 }
 try {
+  Write-UpdateLog '完全版を適用します。'
   if (Test-Path $Backup) { Remove-Item $Backup -Recurse -Force }
   Move-Item -LiteralPath $Target -Destination $Backup
   New-Item -ItemType Directory -Path $Target | Out-Null
   Get-ChildItem -LiteralPath $Stage | Move-Item -Destination $Target
+  Write-UpdateLog '完全版を配置しました。更新版を起動します。'
   Start-Process -FilePath (Join-Path $Target 'Tanutsuna Studio.exe') -ArgumentList @('--update-token',$Token)
   $deadline = (Get-Date).AddSeconds(90)
   while ((Get-Date) -lt $deadline) {
-    if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -like "*$Token*")) { Remove-Item $Backup,$Work -Recurse -Force; exit 0 }
+    if ((Test-Path $Marker) -and ((Get-Content -Raw $Marker) -like "*$Token*")) { Write-UpdateLog '更新版の起動を確認しました。'; Remove-Item $Backup,$Work -Recurse -Force; exit 0 }
     Start-Sleep -Seconds 1
   }
   throw 'Updated app did not report successful startup within 90 seconds'
