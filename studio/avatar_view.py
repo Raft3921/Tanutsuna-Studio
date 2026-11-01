@@ -23,7 +23,7 @@ class SoftwareViewport(QWidget):
         scale=min(self.width(),self.height())/2.90
         view=rotation(y=self.orbit)
         triangles=[]
-        light=np.array([-.45,.65,.75]);light/=np.linalg.norm(light)
+        light=np.array([-.45,.65,.8]);light/=np.linalg.norm(light)
         for mesh,vertices,normals in self.model.posed_meshes(self.pose,self.now):
             vertices=(vertices-np.array([0,1.18,0]))@view.T+np.array([0,1.18,0])
             normals=normals@view.T
@@ -35,6 +35,13 @@ class SoftwareViewport(QWidget):
             base=mesh.get('triangle_colors')
             base=base[visible] if base is not None else np.asarray(mesh['color'])[None,:]
             colors=np.clip(base*shade[:,None]*255,0,255).astype(int)
+            if mesh['name']=='goggle_lens':
+                toward_camera=np.array([0.,1.22,5.35])-tri.mean(axis=1)
+                toward_camera/=np.maximum(np.linalg.norm(toward_camera,axis=1,keepdims=True),.0001)
+                half=light+toward_camera;half/=np.maximum(np.linalg.norm(half,axis=1,keepdims=True),.0001)
+                shine=np.maximum(normal@half,0.)
+                spec=(.68*shine**72+.12*shine**12)*np.maximum(np.sum(normal*toward_camera,axis=1),0.)**.55
+                colors=np.clip(colors+spec[:,None]*np.array([.68,.82,.96])[None,:]*255,0,255).astype(int)
             for points,c in zip(tri,colors):
                 xy=[QPointF(self.width()/2+p[0]*scale,self.height()*.53-(p[1]-1.18)*scale) for p in points]
                 triangles.append((0 if mesh.get('outline') else 1,points[:,2].mean(),xy,tuple(c)))

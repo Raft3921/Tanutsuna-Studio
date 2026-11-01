@@ -18,9 +18,11 @@ DESTINATION = ROOT / 'dist/Tanutsuna-Studio-Windows11-x64'
 
 def ignore(folder, names):
     folder = Path(folder)
+    keep_webengine_snapshot = folder.name == 'resources' and folder.parent.name == 'PySide6'
     return [n for n in names if n in ('.DS_Store', '__pycache__', 'whisper-mac')
             or (n == 'speech' and folder != ROOT / 'studio' / 'assets')
-            or n.endswith(('.pyc', '.blend', '.blend1', '.bin'))
+            or n.endswith(('.pyc', '.blend', '.blend1'))
+            or (n.endswith('.bin') and not (keep_webengine_snapshot and n == 'v8_context_snapshot.bin'))
             or n in ('screen-recorder','desktop-audio','live-window')]
 
 

@@ -14,7 +14,9 @@ class TrackingView(QWebEngineView):
         self.setFixedSize(2, 2)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self._load_error=''
         self.page().permissionRequested.connect(self.permission_requested)
+        self.page().loadingChanged.connect(self.loading_changed)
         self.loadFinished.connect(self.loaded)
         self.setStyleSheet('background: transparent; border: none;')
         parent.installEventFilter(self)
@@ -26,6 +28,7 @@ class TrackingView(QWebEngineView):
         return super().eventFilter(watched, event)
 
     def start(self, url):
+        self._load_error=''
         self.setUrl(QUrl(url))
         self.show()
 
@@ -44,4 +47,14 @@ class TrackingView(QWebEngineView):
             permission.deny()
 
     def loaded(self, ok):
-        self.statusChanged.emit(bool(ok), '追跡画面を準備できません。アプリ内のカメラ機能を確認してください。' if not ok else '')
+        if ok:self.statusChanged.emit(True, '')
+        elif not self._load_error:self.statusChanged.emit(False, '追跡画面を読み込めません。Qt WebEngineの同梱ファイルと起動ログを確認してください。')
+
+    def loading_changed(self, info):
+        if info.isErrorPage():
+            detail=info.errorString().strip()
+            code=info.errorCode()
+            message=f'追跡画面を読み込めません（WebEngine {code}）。'
+            if detail:message+=' '+detail[:240]
+            self._load_error=message
+            self.statusChanged.emit(False,message)

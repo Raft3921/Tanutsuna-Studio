@@ -478,6 +478,16 @@ def main():
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Raft3921.TanutsunaStudio')
         except (AttributeError,OSError):pass
+        # The Windows build installs QtWebEngine beside the PySide6 Python
+        # package rather than under a system Qt prefix. Point Chromium at the
+        # bundled helper, resource packs, and locale packs explicitly.
+        pyside_root=Path(__import__('PySide6').__file__).resolve().parent
+        webengine_process=pyside_root/'QtWebEngineProcess.exe'
+        webengine_resources=pyside_root/'resources'
+        webengine_locales=pyside_root/'translations'/'qtwebengine_locales'
+        if webengine_process.is_file():os.environ['QTWEBENGINEPROCESS_PATH']=str(webengine_process)
+        if webengine_resources.is_dir():os.environ['QTWEBENGINE_RESOURCES_PATH']=str(webengine_resources)
+        if webengine_locales.is_dir():os.environ['QTWEBENGINE_LOCALES_PATH']=str(webengine_locales)
     if sys.platform == 'darwin' and getattr(sys, 'frozen', False):
         # PyInstaller nests Qt frameworks under PySide6/Qt/lib, while QtWebEngine
         # searches Contents/Frameworks/QtWebEngineCore.framework by default.

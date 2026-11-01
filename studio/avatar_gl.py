@@ -34,26 +34,36 @@ uniform int headSurface;
 uniform mat4 model;
 uniform mat4 viewProjection;
 out vec3 worldNormal;
+out vec3 worldPosition;
 out vec2 texCoord;
 void main(){
  vec3 p=position+jawDelta*jawOpen;
  vec3 n=normal;
  if(headSurface==1)n=normalize(vec3(p.x/(1.10*1.10),(p.y-1.18)/(1.05*1.05),p.z/(0.79*0.79)));
- gl_Position=viewProjection*model*vec4(p,1.0);worldNormal=mat3(model)*n;texCoord=uv;
+ vec4 world=model*vec4(p,1.0);
+ gl_Position=viewProjection*world;worldNormal=mat3(model)*n;worldPosition=world.xyz;texCoord=uv;
 }
 '''
 FRAGMENT='''#version 330 core
 in vec3 worldNormal;
+in vec3 worldPosition;
 in vec2 texCoord;
 uniform vec3 baseColor;
 uniform sampler2D baseTexture;
 uniform int textured;
 uniform int ink;
+uniform int glossy;
 out vec4 fragColor;
 void main(){
  vec3 color=textured==1?texture(baseTexture,texCoord).rgb:baseColor;
- float light=dot(normalize(worldNormal),normalize(vec3(-0.45,0.65,0.8)));
+ vec3 N=normalize(worldNormal),L=normalize(vec3(-0.45,0.65,0.8));
+ float light=dot(N,L);
  float band=ink==1?1.0:(light<0.12?0.78:(light<0.42?0.90:1.0));
+ if(glossy==1){
+  vec3 V=normalize(vec3(0.0,1.22,5.35)-worldPosition),H=normalize(L+V);
+  float ndh=max(dot(N,H),0.0),facing=pow(max(dot(N,V),0.0),0.55);
+  color+=vec3(0.68,0.82,0.96)*(0.68*pow(ndh,72.0)+0.12*pow(ndh,12.0))*facing;
+ }
  fragColor=vec4(color*band,1.0);
 }
 '''
@@ -119,6 +129,7 @@ class GLViewport(QOpenGLWidget):
    self.program.setUniformValue('baseColor',QVector3D(*mesh['color']))
    self.program.setUniformValue('textured',1 if texture else 0)
    self.program.setUniformValue('ink',1 if mesh.get('outline') or mesh['name'].startswith(('mouth_lip','mouth_curve','mouth_tip','mouth_cavity','muzzle','ear_fold','goggle_frame')) else 0)
+   self.program.setUniformValue('glossy',1 if mesh['name']=='goggle_lens' else 0)
    vao.bind()
    if mesh.get('procedural_indices') is not None or mesh['name'].startswith(('mouth_curve','mouth_tip')):
     positions=self.model.vertices(mesh,self.pose)
