@@ -4,12 +4,12 @@ import sys
 SERVICE='com.tanutsuna.studio.youtube'
 
 
-def _windows(action,value=''):
+def _windows(action,value='',account='stream'):
     from ctypes import wintypes as w
     class Credential(c.Structure):
         _fields_=[('Flags',w.DWORD),('Type',w.DWORD),('TargetName',w.LPWSTR),('Comment',w.LPWSTR),('LastWritten',w.FILETIME),('CredentialBlobSize',w.DWORD),('CredentialBlob',c.POINTER(c.c_ubyte)),('Persist',w.DWORD),('AttributeCount',w.DWORD),('Attributes',c.c_void_p),('TargetAlias',w.LPWSTR),('UserName',w.LPWSTR)]
     dll=c.WinDLL('Advapi32',use_last_error=True)
-    target=SERVICE+'/stream'
+    target=SERVICE+'/'+account
     if action=='get':
         result=c.POINTER(Credential)();dll.CredReadW.argtypes=[w.LPCWSTR,w.DWORD,w.DWORD,c.POINTER(c.POINTER(Credential))]
         if not dll.CredReadW(target,1,0,c.byref(result)):
@@ -22,13 +22,13 @@ def _windows(action,value=''):
         if not dll.CredDeleteW(target,1,0) and c.get_last_error()!=1168:raise OSError('保存したキーを削除できません。')
         return
     data=value.encode('utf-8');buffer=(c.c_ubyte*len(data)).from_buffer_copy(data)
-    credential=Credential();credential.Type=1;credential.TargetName=target;credential.UserName='YouTube Live';credential.Persist=2
+    credential=Credential();credential.Type=1;credential.TargetName=target;credential.UserName='YouTube Live' if account=='stream' else 'YouTube Data API';credential.Persist=2
     credential.CredentialBlobSize=len(data);credential.CredentialBlob=c.cast(buffer,c.POINTER(c.c_ubyte))
     dll.CredWriteW.argtypes=[c.POINTER(Credential),w.DWORD]
     if not dll.CredWriteW(c.byref(credential),0):raise OSError('キーを資格情報ストアへ保存できません。')
 
 
-def _mac(action,value=''):
+def _mac(action,value='',account='stream'):
     cf=c.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation');sec=c.CDLL('/System/Library/Frameworks/Security.framework/Security')
     ptr=c.c_void_p;owned=[]
     cf.CFStringCreateWithCString.argtypes=[ptr,c.c_char_p,c.c_uint32];cf.CFStringCreateWithCString.restype=ptr
@@ -44,7 +44,7 @@ def _mac(action,value=''):
     def dictionary(values):
         keys=(ptr*len(values))(*values.keys());vals=(ptr*len(values))(*values.values())
         ref=cf.CFDictionaryCreate(None,keys,vals,len(values),None,None);owned.append(ref);return ref
-    base={constant('kSecClass'):constant('kSecClassGenericPassword'),constant('kSecAttrService'):string(SERVICE),constant('kSecAttrAccount'):string('YouTube Live')}
+    base={constant('kSecClass'):constant('kSecClassGenericPassword'),constant('kSecAttrService'):string(SERVICE),constant('kSecAttrAccount'):string('YouTube Live' if account=='stream' else 'YouTube Data API')}
     try:
         if action=='get':
             query=dict(base);query[constant('kSecReturnData')]=ptr.in_dll(cf,'kCFBooleanTrue').value
@@ -65,7 +65,15 @@ def _mac(action,value=''):
         for ref in reversed(owned):cf.CFRelease(ref)
 
 
-def stream_key(action,value=''):
-    if sys.platform=='darwin':return _mac(action,value)
-    if sys.platform=='win32':return _windows(action,value)
+def _secret(action,value='',account='stream'):
+    if sys.platform=='darwin':return _mac(action,value,account)
+    if sys.platform=='win32':return _windows(action,value,account)
     raise OSError('このOSの資格情報ストアには対応していません。')
+
+
+def stream_key(action,value=''):
+    return _secret(action,value,'stream')
+
+
+def youtube_api_key(action,value=''):
+    return _secret(action,value,'api-key')

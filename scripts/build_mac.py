@@ -79,6 +79,7 @@ def build():
         else:
             args += ['--add-data', str(ROOT/'studio/assets'/name) + ':studio/assets/'+name]
     args += ['--add-data',str(ROOT/'studio/assets/tanutsuna-studio-icon.png')+':studio/assets']
+    args += ['--add-data',str(ROOT/'studio/assets/live-studio-background.png')+':studio/assets']
     args += ['--add-binary', str(native/'screen-recorder')+':studio/native','--add-binary',str(native/'desktop-audio')+':studio/native','--add-binary',str(native/'live-window')+':studio/native', '--add-binary',str(native/'whisper-mac/whisper-cli')+':studio/native/whisper-mac', '--add-data',str(ROOT/'studio/assets/speech/WHISPER-LICENSE.txt')+':studio/native']
     for module in ('tkinter', 'unittest'):
         args += ['--exclude-module', module]
