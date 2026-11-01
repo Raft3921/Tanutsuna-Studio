@@ -1,11 +1,13 @@
 from pathlib import Path
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 import math
 import copy
 import json
+import sys
 from PySide6.QtCore import QElapsedTimer, QObject, QPointF, QRectF, Qt, QTimer, QUrl, Signal, QSize
 from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPen, QBrush, QPolygonF
-from PySide6.QtMultimedia import QAudioBufferOutput, QAudioFormat, QAudioOutput, QMediaDevices, QMediaPlayer, QVideoSink
+from PySide6.QtMultimedia import QAudioBufferOutput, QAudioFormat, QAudioOutput, QMediaDevices, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from .model import Clip, Library
 from .scene import leaves_at, channel_key
@@ -216,6 +218,9 @@ class Channel(QObject):
         self.image = QImage()
         self.ready, self.pending = False, None
         self.still_target = None
+        self.frame_generation = 0
+        self.frame_conversion_active = False
+        self.pending_video_frame = None
         self.generated_key = None
         self.parent_processors = {}
         self.player = QMediaPlayer(self)
@@ -252,8 +257,49 @@ class Channel(QObject):
                     return
                 self.still_target = None
                 self.player.pause()
-            self.image = frame.toImage()
-            self.owner.video.update()
+            if self.owner.frame_conversion_pool is None:
+                self.image = frame.toImage()
+                self.owner.video.update()
+            else:
+                # QVideoFrame.toImage() can map and copy a full 1080p frame.
+                # Keep that work off the Windows UI thread, and retain only the
+                # newest waiting frame so a slow machine never builds a backlog.
+                self.pending_video_frame = QVideoFrame(frame)
+                self.start_frame_conversion()
+
+    def start_frame_conversion(self):
+        if self.frame_conversion_active or self.pending_video_frame is None:
+            return
+        frame = self.pending_video_frame
+        self.pending_video_frame = None
+        generation, clip_id = self.frame_generation, self.clip.id if self.clip else ''
+        self.frame_conversion_active = True
+        future = self.owner.frame_conversion_pool.submit(frame.toImage)
+
+        def completed(result):
+            try:
+                image = result.result()
+            except Exception:
+                image = QImage()
+            self.owner.frameConverted.emit(self, image, generation, clip_id, frame)
+
+        future.add_done_callback(completed)
+
+    def accept_frame_conversion(self, image, generation, clip_id, source_frame):
+        self.frame_conversion_active = False
+        if generation == self.frame_generation and self.clip and self.clip.id == clip_id:
+            if image is None or image.isNull():
+                # Keep playback working on drivers that cannot map a video
+                # surface from a worker thread. This is a rare compatibility
+                # fallback; normal Windows playback converts off-thread.
+                try:
+                    image = source_frame.toImage()
+                except Exception:
+                    image = QImage()
+            if image is not None and not image.isNull():
+                self.image = image
+                self.owner.video.update()
+        self.start_frame_conversion()
 
     def status(self, status):
         if not self.clip or self.owner.library.assets[self.clip.asset_id].kind != 'media':
@@ -271,6 +317,9 @@ class Channel(QObject):
 
     def load(self, clip, frame, force=False):
         changed = not self.clip or self.clip.id != clip.id
+        if changed or force:
+            self.frame_generation += 1
+            self.pending_video_frame = None
         self.clip = clip
         asset = self.owner.library.assets[clip.asset_id]
         source_frame = clip.source_in + frame - clip.start
@@ -369,6 +418,8 @@ class Channel(QObject):
     def clear(self):
         if self.clip is None and self.player.source().isEmpty():
             return
+        self.frame_generation += 1
+        self.pending_video_frame = None
         self.pause()
         self.clip, self.ready, self.pending = None, False, None
         self.generated_key = None
@@ -377,6 +428,7 @@ class Channel(QObject):
 
 
 class Preview(QWidget):
+    frameConverted = Signal(object, object, int, str, object)
     frameChanged = Signal(int)
     playingChanged = Signal(bool)
     error = Signal(str)
@@ -386,6 +438,7 @@ class Preview(QWidget):
     def __init__(self):
         super().__init__()
         self.library = Library()
+        self.frameConverted.connect(self.accept_frame_conversion, Qt.ConnectionType.QueuedConnection)
         self.frame, self.mode, self.source_id = 0, 'timeline', ''
         self.playing, self.notice, self.channels = False, '', {}
         self.transforms = {}
@@ -399,6 +452,8 @@ class Preview(QWidget):
         self.effect_images.failed.connect(self.fail)
         self.clock = QElapsedTimer()
         self.base, self.waiting = 0, False
+        self.frame_conversion_pool = (ThreadPoolExecutor(max_workers=2, thread_name_prefix='Studio-video-frame')
+                                      if sys.platform == 'win32' else None)
         self.source_channel = Channel(self)
         self.video = Canvas(self)
         layout = QVBoxLayout(self)
@@ -408,6 +463,13 @@ class Preview(QWidget):
         self.timer.setInterval(15)
         self.timer.timeout.connect(self.tick)
         self.timer.start()
+
+    def accept_frame_conversion(self, channel, image, generation, clip_id, source_frame):
+        # A project reset may retire a channel while a conversion is in flight.
+        # Drop that result before touching a deleted Qt object.
+        if channel is not self.source_channel and channel not in self.channels.values():
+            return
+        channel.accept_frame_conversion(image, generation, clip_id, source_frame)
 
     def generated_ready(self):
         self.sync()
@@ -695,10 +757,12 @@ class Preview(QWidget):
         self.video.update()
 
     def shutdown(self):
-        self.effect_images.shutdown()
-        self.generated_images.shutdown()
         self.timer.stop()
         self.pause()
         self.source_channel.clear()
         for channel in self.channels.values():
             channel.clear()
+        if self.frame_conversion_pool is not None:
+            self.frame_conversion_pool.shutdown(wait=True, cancel_futures=True)
+        self.effect_images.shutdown()
+        self.generated_images.shutdown()
