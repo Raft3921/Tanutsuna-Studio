@@ -49,7 +49,8 @@ class RecordingPanel(QWidget):
         self.avatar = QCheckBox('V体も別素材に保存'); self.avatar.setChecked(bool(saved_settings.get('avatar',True)))
         for widget in (self.desktop, self.voice, self.avatar): row.addWidget(widget)
         layout.addLayout(row)
-        note = QLabel('V体のカメラは収録開始時に自動準備します（初回のOS許可は必要です）。収録中は動きだけを記録し、映像化は終了後に処理し、全素材を編集の右端へ追加します。PC音には通知なども含みます。')
+        note_text=('V体のカメラは収録開始時に自動準備します。Windowsではカメラ・マイクの許可ダイアログは表示されないため、Windowsのプライバシー設定でデスクトップアプリのアクセスをオンにしてください。画面取得とPC音にもOSの許可画面はありません。' if sys.platform=='win32' else 'V体のカメラは収録開始時に自動準備します（初回のOS許可は必要です）。')
+        note = QLabel(note_text+' 収録中は動きだけを記録し、映像化は終了後に処理し、全素材を編集の右端へ追加します。PC音には通知なども含みます。')
         note.setWordWrap(True); layout.addWidget(note)
         row = QHBoxLayout()
         self.start = QPushButton('収録を開始'); self.start.setObjectName('Primary'); self.start.clicked.connect(self.begin)
@@ -157,7 +158,10 @@ class RecordingPanel(QWidget):
                     self.cancel_camera();raise
                 self.camera_timer.start();self.update_buttons()
                 self.desk.capture_badge.setText('カメラの準備中')
-                self.message('V体のカメラを自動準備中。初回はOSのカメラ許可を確認し、顔をカメラに向けてください。まだ収録は始まっていません。')
+                if sys.platform=='win32':
+                    self.message('V体のカメラを自動準備中です。Windowsのプライバシー設定でデスクトップアプリのカメラアクセスをオンにしてください。許可ダイアログは表示されません。まだ収録は始まっていません。')
+                else:
+                    self.message('V体のカメラを自動準備中。初回はOSのカメラ許可を確認し、顔をカメラに向けてください。まだ収録は始まっていません。')
             else:self.launch_capture(options)
         self.report(start)
 
@@ -192,7 +196,8 @@ class RecordingPanel(QWidget):
         else: self.recorder.stop()
 
     def state_changed(self, state):
-        names = {'preparing':'収録の準備中。OSの画面収録・マイク許可が出たら確認してください。',
+        preparing=('収録の準備中です。Windows版では画面収録やマイクの許可ダイアログは表示されません。カメラ・マイクはWindowsのプライバシー設定でデスクトップアプリのアクセスをオンにしてください。' if sys.platform=='win32' else '収録の準備中。OSの画面収録・マイク許可が出たら確認してください。')
+        names = {'preparing':preparing,
             'recording':'収録中 — 1080p / 50fps', 'stopping':'収録を停止してファイルを確定しています。'}
         if state in names: self.message(names[state])
         badge=self.desk.capture_badge

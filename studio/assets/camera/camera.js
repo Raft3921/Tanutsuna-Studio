@@ -100,8 +100,8 @@ function cameraKey(label){return label.toLowerCase().replaceAll('カメラ','cam
 function describeCameraError(error){
   const name=error?.name||'Error',message=error?.message||String(error);
   if(name==='NotAllowedError'){
-    const mac=navigator.userAgent.toLowerCase().includes('mac');
-    const help=mac?'macOS「システム設定 ＞ プライバシーとセキュリティ ＞ カメラ」で、このブラウザーを許可してください。':'OSのプライバシー設定で、このブラウザーのカメラ利用を許可してください。';
+    const ua=navigator.userAgent.toLowerCase(),mac=ua.includes('mac'),win=ua.includes('windows');
+    const help=mac?'macOS「システム設定 ＞ プライバシーとセキュリティ ＞ カメラ」で、たぬつな Studioを許可してください。':win?'Windows「設定 ＞ プライバシーとセキュリティ ＞ カメラ」で「カメラへのアクセス」と「デスクトップ アプリにカメラへのアクセスを許可する」をオンにしてください。マイクも使う場合は「マイクへのアクセス」と「デスクトップ アプリにマイクへのアクセスを許可する」もオンにしてください。Windowsデスクトップアプリでは個別の許可ダイアログやアプリごとのスイッチは表示されません。':'OSのプライバシー設定で、このアプリのカメラ利用を許可してください。';
     return `カメラへのアクセスが拒否されました。${help} 詳細: ${message}`;
   }
   if(name==='NotFoundError')return 'カメラが見つかりません。接続と選択中のカメラを確認してください。詳細: '+message;
@@ -128,7 +128,16 @@ async function cameraList(){
   }
   return devices;
 }
-$('refresh-cameras').onclick=()=>cameraList().catch(()=>{$('status').textContent='カメラ一覧を取得できません。OSのカメラ許可を確認してください。';});
+$('refresh-cameras').onclick=async()=>{
+  $('status').textContent='カメラの接続と許可を確認中…';
+  let probe=null;
+  try{
+    if(!running){probe=await navigator.mediaDevices.getUserMedia({video:true,audio:false});}
+    await cameraList();
+    $('status').textContent=running?'カメラを使用中です。入力機器一覧を更新しました。':'カメラにアクセスできました。入力機器一覧を更新しました。';
+  }catch(error){$('status').textContent='カメラ一覧を更新できません：'+describeCameraError(error);}
+  finally{if(probe)probe.getTracks().forEach(track=>track.stop());}
+};
 $('camera-device').onchange=async()=>{
   preferredLabel=$('camera-device').value?$('camera-device').selectedOptions[0].textContent:'';
   if(running){await stop('カメラを切り替えています…');$('start').click();}
@@ -145,12 +154,9 @@ $('start').onclick=async()=>{
   $('stop').disabled=false;
   const version=++generation;
   try{
-    $('status').textContent='追跡モデルを準備中…';
-    if(!detector){
-      const wasm=await FilesetResolver.forVisionTasks('/tracker/wasm');
-      detector=await FaceLandmarker.createFromOptions(wasm,{baseOptions:{modelAssetPath:'/tracker/face_landmarker.task',delegate:'CPU'},runningMode:'VIDEO',numFaces:1,outputFaceBlendshapes:true,outputFacialTransformationMatrixes:true});
-    }
-    if(generation!==version)return;
+    // Open the camera before loading the comparatively large tracking model.
+    // This makes the OS privacy activity and any permission error immediate.
+    $('status').textContent='カメラを起動中…';
     let devices=await cameraList();
     if(preferredLabel && !devices.some(d=>d.label)){
       const permissionStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
@@ -179,6 +185,12 @@ $('start').onclick=async()=>{
     if(actual)$('camera-device').value=actual;
     const actualMic=stream.getAudioTracks()[0]?.getSettings().deviceId;
     if(actualMic)$('microphone-device').value=actualMic;
+    $('status').textContent='カメラを起動しました。追跡モデルを準備中…';
+    if(!detector){
+      const wasm=await FilesetResolver.forVisionTasks('/tracker/wasm');
+      detector=await FaceLandmarker.createFromOptions(wasm,{baseOptions:{modelAssetPath:'/tracker/face_landmarker.task',delegate:'CPU'},runningMode:'VIDEO',numFaces:1,outputFaceBlendshapes:true,outputFacialTransformationMatrixes:true});
+    }
+    if(generation!==version)return;
     baseline=null;lastVideo=-1;running=true;
     $('stop').disabled=false;$('calibrate').disabled=false;
     tick(version);

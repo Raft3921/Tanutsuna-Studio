@@ -75,7 +75,7 @@ def latest_release() -> dict:
     if latest <= current:
         return {"available": False, "version": tag or STUDIO_VERSION}
     wanted = f"Tanutsuna-Studio-{packaged_platform()}.zip"
-    if not packaged_platform():
+    if not packaged_platform() or installation_root() is None:
         return {"available": True, "version": tag, "unsupported": True,
                 "url": release.get("html_url", "")}
     asset = next((item for item in release.get("assets", []) if item.get("name") == wanted), None)

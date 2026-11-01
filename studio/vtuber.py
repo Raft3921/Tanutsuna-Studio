@@ -114,7 +114,8 @@ class VtuberPanel(QWidget):
         self.status=QLabel('手動で3Dモデルの可動部を確認できます。カメラは停止中です。')
         self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText)
         outer.addWidget(self.status)
-        help_=QLabel('カメラ追跡はこのソフト内で自動開始します。初回のみOSのカメラ・マイク許可が必要です。映像は保存・送信せず、顔の動きはPC内で処理します。サングラスは固定、耳の揺れは補助アニメーションです。')
+        help_text=('Windows版はデスクトップアプリです。Windows「設定 > プライバシーとセキュリティ」でカメラとマイクの「デスクトップ アプリにアクセスを許可する」をオンにしてください。個別の許可ダイアログは表示されません。映像は保存・送信せず、顔の動きはPC内で処理します。' if sys.platform=='win32' else 'カメラ追跡はこのソフト内で自動開始します。初回のみOSのカメラ・マイク許可が必要です。映像は保存・送信せず、顔の動きはPC内で処理します。')
+        help_=QLabel(help_text+' サングラスは固定、耳の揺れは補助アニメーションです。')
         help_.setWordWrap(True);outer.addWidget(help_)
         self.render_status=QLabel('3D描画：互換表示' if self.viewport.software else '3D描画：準備中')
         self.render_status.setWordWrap(True);outer.addWidget(self.render_status)
@@ -239,7 +240,7 @@ class VtuberPanel(QWidget):
                 status=message
                 if 'アクセスが拒否' in message or 'NotAllowedError' in message:
                     if sys.platform=='win32':
-                        status+=' Windows「設定 > プライバシーとセキュリティ > カメラ」で「カメラへのアクセス」と「デスクトップ アプリにカメラへのアクセスを許可する」をオンにしてください。'
+                        status+=' Windows「設定 > プライバシーとセキュリティ > カメラ」で「カメラへのアクセス」と「デスクトップ アプリにカメラへのアクセスを許可する」をオンにしてください。マイクも使う場合は「マイクへのアクセス」と「デスクトップ アプリにマイクへのアクセスを許可する」もオンにしてください。Windowsデスクトップアプリでは個別の許可ダイアログは表示されません。'
                 self.start_button.setText('カメラを確認')
             elif message=='カメラ追跡中':
                 status='追跡データが途切れました。顔をカメラに向け、カメラを他のアプリが使用していないか確認してください。'

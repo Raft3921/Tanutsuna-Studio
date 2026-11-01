@@ -78,11 +78,17 @@ class LivePanel(QWidget):
         stage_header=QHBoxLayout();stage_name=QLabel('PROGRAM  /  配信映像');stage_name.setStyleSheet('font-weight:700;color:#b8dce5')
         self.scene_badge=QLabel('待機中');self.scene_badge.setStyleSheet('color:#91a8b1;background:#18313a;padding:4px 10px;border-radius:8px')
         stage_header.addWidget(stage_name);stage_header.addStretch();stage_header.addWidget(self.scene_badge);stage_layout.addLayout(stage_header)
+        chat_row=QHBoxLayout();self.chat_overlay_enabled=QCheckBox('チャットを配信映像に表示');self.chat_overlay_enabled.setChecked(bool(self.saved_preferences.get('chat_overlay',False)))
+        self.chat_url=QLineEdit(saved.get('video_url',''));self.chat_url.setPlaceholderText('YouTubeライブ配信URL（APIキー不要）');self.chat_url.setMaximumWidth(360)
+        chat_row.addWidget(self.chat_overlay_enabled);chat_row.addWidget(self.chat_url,1);stage_layout.addLayout(chat_row)
         self.preview=QLabel('配信開始を押すと、必要な入力を自動で準備します。');self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setMinimumSize(480,270);self.preview.setStyleSheet('background:#13232c;color:#d4e5eb;border:1px solid #36515c;border-radius:8px')
         stage_layout.addWidget(self.preview,1);body.addWidget(stage,5)
-        from .youtube_panel import YouTubePanel
-        self.youtube_panel=YouTubePanel(desk.workspace);self.youtube_panel.setMinimumWidth(280);self.youtube_panel.setMaximumWidth(430);body.addWidget(self.youtube_panel,3)
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        self.chat_view=QWebEngineView(self.preview);self.chat_view.hide()
+        self.chat_overlay_enabled.toggled.connect(self.chat_overlay_changed);self.chat_url.editingFinished.connect(self.load_chat_overlay)
+        self.chat_capture_timer=QTimer(self);self.chat_capture_timer.setInterval(1500);self.chat_capture_timer.timeout.connect(self.capture_chat_overlay)
+        if self.chat_overlay_enabled.isChecked():QTimer.singleShot(250,lambda:self.chat_overlay_changed(True))
         outer.addLayout(body,1)
         self.record=QCheckBox('同時に録画して、終了後に編集へ保存する');self.record.setChecked(bool(self.saved_preferences.get('record',False)));outer.addWidget(self.record)
         form=QFormLayout();saved_server=saved.get('server')
@@ -118,6 +124,7 @@ class LivePanel(QWidget):
         for widget in (self.avatar,self.record,*self.mutes.values()):widget.toggled.connect(self.schedule_preferences_save)
         for widget in (*self.transforms.values(),*self.gains.values()):widget.valueChanged.connect(self.schedule_preferences_save)
         self.server.textChanged.connect(self.schedule_preferences_save)
+        self.chat_overlay_enabled.toggled.connect(self.schedule_preferences_save);self.chat_url.editingFinished.connect(self.schedule_preferences_save)
         self.refresh_windows();self.update_mix();self.update_buttons();QTimer.singleShot(0,self.load_secret)
         if self.windows.currentData() is None:self.status.setText('先にゲームのウィンドウを選択してください。映像確認にYouTubeキーは不要です。')
 
@@ -132,6 +139,7 @@ class LivePanel(QWidget):
         live['server']=self.server.text().strip()
         live['preferences']={
             'quality':self.quality.currentIndex(),'avatar':self.avatar.isChecked(),
+            'chat_overlay':self.chat_overlay_enabled.isChecked(),
             **{'transform_'+name:field.value() for name,field in self.transforms.items()},
             'mic_id':bytes(self.mics.currentData() or b'').decode(errors='replace'),
             **{'gain_'+role:gain.value() for role,gain in self.gains.items()},
@@ -141,6 +149,35 @@ class LivePanel(QWidget):
             'window_title':self.windows.currentText() if self.windows.currentData() is not None else '',
         }
         self.desk.workspace.save()
+
+    def chat_overlay_changed(self,enabled):
+        self.chat_view.setVisible(enabled)
+        if enabled:self.load_chat_overlay();self.chat_capture_timer.start()
+        else:self.chat_capture_timer.stop()
+
+    def load_chat_overlay(self):
+        from .youtube_panel import video_id_from_url
+        video_id=video_id_from_url(self.chat_url.text())
+        if not video_id:
+            if self.chat_overlay_enabled.isChecked():self.status.setText('チャット表示には有効なYouTubeライブURLが必要です。APIキーは不要です。')
+            return
+        self.desk.workspace.data.setdefault('live',{})['video_url']=self.chat_url.text().strip();self.desk.workspace.save()
+        if getattr(self,'chat_video_id','')!=video_id:
+            self.chat_video_id=video_id
+            self.chat_view.setUrl(QUrl('https://www.youtube.com/live_chat?is_popout=1&v='+video_id))
+
+    def capture_chat_overlay(self):
+        if not self.chat_overlay_enabled.isChecked() or not self.chat_view.isVisible():return
+        w=max(160,round(self.preview.width()*.28));h=max(120,round(self.preview.height()*.70))
+        self.chat_view.setGeometry(self.preview.width()-w-8,8,w,h);self.chat_view.raise_()
+        self.chat_pixmap=self.chat_view.grab().toImage()
+
+    def paint_chat_overlay(self,frame):
+        image=getattr(self,'chat_pixmap',QImage())
+        if not self.chat_overlay_enabled.isChecked() or image.isNull():return
+        width,height=frame.width(),frame.height();box_w=min(round(width*.27),480);box_h=min(round(height*.68),720)
+        overlay=image.scaled(box_w,box_h,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation)
+        painter=QPainter(frame);painter.setOpacity(.94);painter.drawImage(QRect(width-box_w-round(width*.025),round(height*.04),box_w,box_h),overlay);painter.end()
 
     def prepare_background(self,*_):
         if self.background_image.isNull():
@@ -248,7 +285,9 @@ class LivePanel(QWidget):
 
     def capture_error(self,*args):
         self.stop_capture();self.game=None
-        self.status.setText(args[0] if args and isinstance(args[0],str) else 'ウィンドウの映像を取得できません。選択したゲームの起動状態と画面収録の許可を確認してください。')
+        if args and isinstance(args[0],str):self.status.setText(args[0])
+        elif sys.platform=='win32':self.status.setText('選択したゲームの画面を取得できません。ゲームが起動中か、画面取得に対応したウィンドウか確認してください。Windowsでは画面収録の許可画面は表示されません。')
+        else:self.status.setText('ウィンドウの映像を取得できません。選択したゲームの起動状態と画面収録の許可を確認してください。')
 
     def received(self,frame):
         if self.previewing and self.capture.isActive() and frame.isValid():self.game=frame.toImage()
@@ -263,7 +302,10 @@ class LivePanel(QWidget):
         if self.desk.busy:raise ValueError('収録・素材の処理を完了してから配信を準備してください。')
         app=QApplication.instance();permission=QMicrophonePermission()
         voice_available=bool(QMediaDevices.audioInputs())
-        if voice_available:
+        # QPermission is not implemented for Windows desktop apps. Windows
+        # controls them with the global desktop-app microphone switch; treating
+        # the unsupported status as Denied blocks Windows preview startup.
+        if voice_available and sys.platform=='darwin':
             status=app.checkPermission(permission)
             if status==Qt.PermissionStatus.Undetermined:
                 app.requestPermission(permission,self,self.permission_finished);return
@@ -283,7 +325,8 @@ class LivePanel(QWidget):
             self.audio.start(self.mics.currentData(),desktop=True,voice=voice_available)
             self.mutes['voice'].setEnabled(voice_available)
             if not voice_available:self.mutes['voice'].setChecked(True)
-            self.start_capture(window);self.status.setText('ゲーム画面・V体・音声を準備中。OSの許可が出たら確認してください。まだ配信していません。')
+            preparing=('ゲーム画面・V体・音声を準備中です。Windowsでは許可ダイアログは表示されません。カメラとマイクのプライバシー設定でデスクトップアプリのアクセスを確認してください。' if sys.platform=='win32' else 'ゲーム画面・V体・音声を準備中。OSの許可が出たら確認してください。')
+            self.start_capture(window);self.status.setText(preparing+' まだ配信していません。')
         except Exception:
             self.stop_preview();raise
         self.update_buttons()
@@ -390,6 +433,7 @@ class LivePanel(QWidget):
                 self.update_mix()
         else:
             program=self.scene_frame(self.current_scene,game_program,avatar,now,width,height)
+        self.paint_chat_overlay(program)
         self.engine.submit_frame(program,screen,pose,transform);self.tick_count+=1
         if self.tick_count%3==0 and self.isVisible():
             self.preview.setPixmap(QPixmap.fromImage(program).scaled(self.preview.size(),Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.FastTransformation))

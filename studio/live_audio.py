@@ -46,7 +46,10 @@ class LiveAudio(QObject):
             self.mic_decoder=PCMDecoder(fmt.sampleRate(),fmt.channelCount(),bits,'float' if fmt.sampleFormat()==QAudioFormat.SampleFormat.Float else 'int')
             self.microphone=QAudioSource(device,fmt,self);self.microphone.stateChanged.connect(self.mic_state);self.microphone.setBufferSize(max(4096,fmt.bytesForDuration(100000)))
             self.io=self.microphone.start()
-            if self.io is None:raise ValueError('マイクを開始できません。OSの許可を確認してください。')
+            if self.io is None:
+                if sys.platform=='win32':
+                    raise ValueError('マイクを開始できません。Windows「設定 > プライバシーとセキュリティ > マイク」で「マイクへのアクセス」と「デスクトップ アプリにマイクへのアクセスを許可する」をオンにしてください。デスクトップアプリには個別の許可ダイアログは表示されません。')
+                raise ValueError('マイクを開始できません。OSの許可を確認してください。')
             self.io.readyRead.connect(self.read_mic)
         if not desktop:self.ready.emit();return
         native=Path(__file__).parent/'native'
@@ -67,7 +70,9 @@ class LiveAudio(QObject):
         self.process.errorOccurred.connect(lambda _:self.failed.emit('PC音エンジンを開始できません。') if not self.stopping else None);self.process.start()
     def mic_state(self,state):
         if not self.stopping and state==QAudio.State.StoppedState and self.microphone and self.microphone.error()!=QAudio.Error.NoError:
-            self.failed.emit('マイク入力が停止しました。入力機器とOSの許可を確認してください。')
+            if sys.platform=='win32':
+                self.failed.emit('マイク入力が停止しました。Windows「設定 > プライバシーとセキュリティ > マイク」の「デスクトップ アプリにマイクへのアクセスを許可する」と入力機器を確認してください。')
+            else:self.failed.emit('マイク入力が停止しました。入力機器とOSの許可を確認してください。')
 
     def read_mic(self):
         if self.io:
