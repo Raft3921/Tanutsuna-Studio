@@ -104,6 +104,10 @@ class Recorder(QObject):
         self.stop_watch = QTimer(self); self.stop_watch.setInterval(1000)
         self.stop_watch.timeout.connect(self.update_stop_status)
         self.last_stop_status = ''
+        self.video_frames_seen = 0
+        self.video_frames_started = None
+        self.video_frames_reported = 0
+        self.video_frames_last_report = 0.0
 
     def capture_log(self, message):
         if not self.folder:
@@ -149,6 +153,8 @@ class Recorder(QObject):
         self.folder, self.take = create_take(project, options,temporary=True)
         self.stop_signal = None; self.stop_deadline = None
         self.audio_force_stopped = False; self.audio_repaired = False
+        self.video_frames_seen = 0; self.video_frames_started = None
+        self.video_frames_reported = 0; self.video_frames_last_report = 0.0
         self.capture_log(f'収録準備開始。設定={options!r}')
         self.lines = b''; self.stop_requested = False; self.preserve_capture = False
         self.take['timestamps'] = {}
@@ -193,8 +199,12 @@ class Recorder(QObject):
         fmt = QMediaFormat(QMediaFormat.FileFormat.MPEG4)
         fmt.setVideoCodec(QMediaFormat.VideoCodec.H264)
         self.encoder.setMediaFormat(fmt)
-        self.encoder.setVideoResolution(QSize(WIDTH, HEIGHT)); self.encoder.setVideoFrameRate(FPS)
-        self.encoder.setVideoBitRate(10_000_000)
+        # Windows screen capture feeds a software/driver-selected H.264 encoder.
+        # 50fps at 1080p was too demanding on some PCs and Qt silently drops
+        # frames when its encoder cannot keep up. Keep 1080p detail but target
+        # 30fps, a much more achievable rate for desktop recording.
+        self.encoder.setVideoResolution(QSize(WIDTH, HEIGHT)); self.encoder.setVideoFrameRate(30)
+        self.encoder.setVideoBitRate(6_000_000)
         self.encoder.setEncodingMode(QMediaRecorder.EncodingMode.ConstantBitRateEncoding)
         self.encoder.setOutputLocation(QUrl.fromLocalFile(str(self.folder / 'screen.mp4')))
         self.encoder.errorOccurred.connect(lambda e, msg: self.abort(msg))
@@ -238,6 +248,19 @@ class Recorder(QObject):
         self.capture.setActive(True); self.encoder.record()
 
     def first_video(self, frame):
+        if frame.isValid():
+            now = time.perf_counter()
+            if self.video_frames_started is None:
+                self.video_frames_started = now
+                self.video_frames_last_report = now
+            self.video_frames_seen += 1
+            if now - self.video_frames_last_report >= 5:
+                elapsed = max(.001, now - self.video_frames_started)
+                interval = max(.001, now - self.video_frames_last_report)
+                recent = self.video_frames_seen - self.video_frames_reported
+                self.capture_log(f'画面入力: 累計{self.video_frames_seen}フレーム、平均{self.video_frames_seen / elapsed:.1f}fps、直近{recent / interval:.1f}fps')
+                self.video_frames_reported = self.video_frames_seen
+                self.video_frames_last_report = now
         if frame.isValid() and 'screen' not in self.take['timestamps'] and self.encoder.recorderState() == QMediaRecorder.RecorderState.RecordingState:
             # Windows Qt does not expose the DXGI/QPC capture clock. This is an arrival estimate.
             self.take['timestamps']['screen'] = time.perf_counter()
@@ -246,6 +269,9 @@ class Recorder(QObject):
 
     def video_state(self, state):
         self.capture_log('画面録画状態: ' + str(state))
+        if state == QMediaRecorder.RecorderState.StoppedState and self.video_frames_started is not None:
+            elapsed = max(.001, time.perf_counter() - self.video_frames_started)
+            self.capture_log(f'画面入力終了: {self.video_frames_seen}フレーム、平均{self.video_frames_seen / elapsed:.1f}fps')
         if state == QMediaRecorder.RecorderState.StoppedState and self.state == 'stopping':
             self.update_stop_status()
             self.finish_windows_if_ready()
