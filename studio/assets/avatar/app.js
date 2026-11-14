@@ -206,7 +206,7 @@ function setStatus(label, mode = '') {
 
 function showError(message) {
   errorBox.textContent = message;
-  errorBox.style.display = 'block';
+  errorBox.classList.add('is-visible');
 }
 
 function makeHeadPivot(root, part) {

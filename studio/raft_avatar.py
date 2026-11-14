@@ -119,7 +119,7 @@ class RaftAvatarView(QWebEngineView):
         if not self._loaded or self._capture_pending or now-self._last_capture_request<1/30:
             return self._frame
         self._capture_pending=True;self._last_capture_request=now
-        self.page().runJavaScript('window.captureAvatarFrame && window.captureAvatarFrame()',self._receive_frame)
+        self.page().runJavaScript("window.captureAvatarFrame ? window.captureAvatarFrame() : (window.avatarError ? 'error:' + window.avatarError : '')",self._receive_frame)
         return self._frame
 
     def _receive_frame(self,result):
