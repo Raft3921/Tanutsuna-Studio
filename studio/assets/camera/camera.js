@@ -4,6 +4,13 @@ let preferredLabel=new URLSearchParams(location.hash.slice(1)).get('camera')||''
 let preferredMicrophone=new URLSearchParams(location.hash.slice(1)).get('microphone')||'';
 let detector, stream, audioContext, audioAnalyser, audioSamples, running=false, audioReady=false, audioNoise=.002, audioMouth=0;
 let generation=0, baseline=null, busy=false, lastVideo=-1, noiseHistory=[];
+function estimateGaze(points){
+  if(!points || points.length<478)return {x:0,y:0};
+  const eyes=[{iris:468,a:33,b:133,top:159,bottom:145},{iris:473,a:362,b:263,top:386,bottom:374}];
+  let x=0,y=0,n=0;
+  for(const e of eyes){const a=points[e.a],b=points[e.b],top=points[e.top],bottom=points[e.bottom],iris=points[e.iris];const w=Math.max(.001,Math.abs(b.x-a.x)),h=Math.max(.001,Math.abs(bottom.y-top.y));if(h/w<.12)continue;x+=(iris.x-(a.x+b.x)/2)/w;y+=(iris.y-(top.y+bottom.y)/2)/h;n++;}
+  return n?{x:x/n,y:y/n}:{x:0,y:0};
+}
 // CPU face inference competes with capture and editing on Windows laptops.
 // Fifteen inference frames per second at 320x240 reduces that load while
 // keeping head and mouth tracking responsive.
@@ -52,22 +59,28 @@ function poseFromResult(result) {
   const c=Object.fromEntries((result.faceBlendshapes?.[0]?.categories||[]).map(x=>[x.categoryName,x.score]));
   const m=result.facialTransformationMatrixes?.[0]?.data;
   if(!m || m.length!==16) return null;
+  const points=result.faceLandmarks?.[0]||[],gaze=estimateGaze(points);
   // MediaPipe returns a column-major 4x4 transform. Normalize rotation axes to discard scale.
   const length=Math.hypot(m[0],m[1],m[2])||1;
   const pitch=Math.atan2(m[6],m[10])*180/Math.PI;
   const yaw=Math.atan2(-m[2]/length,Math.hypot(m[6],m[10])/length)*180/Math.PI;
   const roll=Math.atan2(m[1],m[0])*180/Math.PI;
-  if(!baseline) baseline={yaw,pitch,roll,x:m[12],y:m[13],z:m[14]};
+  if(!baseline) baseline={yaw,pitch,roll,x:m[12],y:m[13],z:m[14],gazeX:gaze.x,gazeY:gaze.y};
   const visualJaw=c.jawOpen||0, voiceJaw=speechMouth(), jawOpen=Math.max(visualJaw,voiceJaw);
+  const lipGap=points[13]&&points[14]&&points[61]&&points[291]
+    ?Math.hypot(points[14].x-points[13].x,points[14].y-points[13].y)/Math.max(.001,Math.hypot(points[291].x-points[61].x,points[291].y-points[61].y)):0;
+  const pucker=Math.max(c.mouthFunnel||0,c.mouthPucker||0),stretch=Math.max(c.mouthStretchLeft||0,c.mouthStretchRight||0),smile=Math.max(c.mouthSmileLeft||0,c.mouthSmileRight||0);
+  const opening=Math.max(jawOpen*2.5,lipGap*1.8);
+  let vowel=0;
+  if(opening>.065) vowel=pucker>.18?(opening>.32?5:3):(stretch>.20||smile>.28)?(opening>.28?4:2):1;
   return {yaw:yaw-baseline.yaw,pitch:pitch-baseline.pitch,roll:roll-baseline.roll,
     headX:(m[12]-baseline.x)*.045,headY:(m[13]-baseline.y)*.045,headZ:(m[14]-baseline.z)*.035,
-    jawOpen,browUp:c.browInnerUp||0,
-    // Visual vowel estimates from lip shape; no speech recognition or audio upload.
-    mouthA:Math.max(0,visualJaw-(c.mouthFunnel||0)-(c.mouthPucker||0),voiceJaw),
-    mouthI:Math.max(c.mouthStretchLeft||0,c.mouthStretchRight||0)*(1-(c.jawOpen||0)),
-    mouthU:c.mouthPucker||0,
-    mouthE:Math.max(c.mouthSmileLeft||0,c.mouthSmileRight||0)*(c.jawOpen||0),
-    mouthO:c.mouthFunnel||0};
+    gazeX:Math.max(-.35,Math.min(.35,(gaze.x-baseline.gazeX)*1.5)),
+    gazeY:Math.max(-.35,Math.min(.35,(gaze.y-baseline.gazeY)*1.5)),
+    jawOpen:vowel?Math.max(jawOpen,.16):0,browUp:c.browInnerUp||0,
+    // Use the same vowel classifier as the source avatar to preserve its authored mouth proportions.
+    mouthA:vowel===1?1:0,mouthI:vowel===2?1:0,mouthU:vowel===3?1:0,
+    mouthE:vowel===4?1:0,mouthO:vowel===5?1:0};
 }
 async function send(detected,pose={},status='') {
   const response=await fetch('/pose',{method:'POST',headers:{'Content-Type':'application/json','X-Tracking-Token':token},

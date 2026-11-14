@@ -29,6 +29,8 @@ class Pose:
     eyeBlinkRight: float = 0
     eyeWideLeft: float = 0
     eyeWideRight: float = 0
+    gazeX: float = 0
+    gazeY: float = 0
     mouthSmile: float = 0
     browUp: float = 0
     mouthA: float = 0
@@ -41,7 +43,7 @@ class Pose:
     mouthStroke: float = 1.15
 
 
-LIMITS = {'yaw': (-65,65), 'pitch': (-40,40), 'roll': (-40,40), 'headX':(-1,1), 'headY':(-1,1), 'headZ':(-1,1), 'mouthWidth':(.55,1.9), 'mouthHeight':(.15,1.3), 'mouthStroke':(.8,1.8)}
+LIMITS = {'yaw': (-65,65), 'pitch': (-40,40), 'roll': (-40,40), 'headX':(-1,1), 'headY':(-1,1), 'headZ':(-1,1), 'gazeX':(-.35,.35), 'gazeY':(-.35,.35), 'mouthWidth':(.55,1.9), 'mouthHeight':(.15,1.3), 'mouthStroke':(.8,1.8)}
 
 
 def parse_pose(data):
