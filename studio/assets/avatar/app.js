@@ -427,35 +427,51 @@ function imageAssetUrl(file) {
   return `./assets/${encodeURIComponent(file)}?revision=${assetRevision}`;
 }
 
+const FACE_TEXTURE_FILES = {
+  base: 'face-base.png', eyesOpen: 'face-eyes-open.png', pupils: 'face-pupils.png',
+  eyeMask: 'face-eye-mask.png', eyebrows: 'face-eyebrows.png', eyesHalf: 'face-eyes-half.png', eyesClosed: 'face-eyes-closed.png',
+  mouthClosed: 'face-mouth-closed.png', mouthA: 'face-mouth-a.png', mouthI: 'face-mouth-i.png',
+  mouthU: 'face-mouth-u.png', mouthE: 'face-mouth-e.png', mouthO: 'face-mouth-o.png'
+};
+
+function makeFallbackFaceTexture(key) {
+  const fallback = key === 'base' ? [245, 226, 205, 255] : [0, 0, 0, 0];
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 1;
+  const context = canvas.getContext('2d');
+  context.fillStyle = `rgba(${fallback[0]},${fallback[1]},${fallback[2]},${fallback[3] / 255})`;
+  context.fillRect(0, 0, 1, 1);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = key === 'eyeMask' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = true;
+  texture.needsUpdate = true;
+  if (key === 'eyesClosed') texture.userData.missingBlink = true;
+  return texture;
+}
+
+function makeFallbackFaceTextures() {
+  return Object.fromEntries(Object.keys(FACE_TEXTURE_FILES).map(key => [key, makeFallbackFaceTexture(key)]));
+}
+
 async function loadFaceTextures() {
   const loader = new THREE.TextureLoader();
   const warnings = [];
   let forceFallbackResolver;
   const forceFallbackSignal = new Promise(resolve => { forceFallbackResolver = resolve; });
-  const files = {
-    base: 'face-base.png', eyesOpen: 'face-eyes-open.png', pupils: 'face-pupils.png',
-    eyeMask: 'face-eye-mask.png', eyebrows: 'face-eyebrows.png', eyesHalf: 'face-eyes-half.png', eyesClosed: 'face-eyes-closed.png',
-    mouthClosed: 'face-mouth-closed.png', mouthA: 'face-mouth-a.png', mouthI: 'face-mouth-i.png',
-    mouthU: 'face-mouth-u.png', mouthE: 'face-mouth-e.png', mouthO: 'face-mouth-o.png'
-  };
   const makeFallback = (key, file, error) => {
     warnings.push(`${file}: ${error && error.message || error}`);
-    const fallback = key === 'base' ? [245, 226, 205, 255] : [0, 0, 0, 0];
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 1;
-    const context = canvas.getContext('2d');
-    context.fillStyle = `rgba(${fallback[0]},${fallback[1]},${fallback[2]},${fallback[3] / 255})`;
-    context.fillRect(0, 0, 1, 1);
-    const texture = new THREE.CanvasTexture(canvas);
-    if (key === 'eyesClosed') texture.userData.missingBlink = true;
-    return texture;
+    return makeFallbackFaceTexture(key);
   };
   window.forceAvatarTextureFallback = () => {
     window.avatarStatus = '顔画像を代替してモデルを表示しています';
     forceFallbackResolver?.(true);
     return true;
   };
-  const textureLoads = Promise.all(Object.entries(files).map(async ([key, file]) => {
+  const textureLoads = Promise.all(Object.entries(FACE_TEXTURE_FILES).map(async ([key, file]) => {
     let texture;
     let timeout;
     try {
@@ -483,7 +499,7 @@ async function loadFaceTextures() {
     forceFallbackSignal.then(() => ({ forced: true }))
   ]);
   const entries = result.forced
-    ? Object.entries(files).map(([key, file]) => [key, makeFallback(key, file, new Error('画像読み込みを省略しました'))])
+    ? Object.entries(FACE_TEXTURE_FILES).map(([key, file]) => [key, makeFallback(key, file, new Error('画像読み込みを省略しました'))])
     : result.entries;
   window.avatarTextureWarnings = warnings;
   return Object.fromEntries(entries);
@@ -507,9 +523,9 @@ new FBXLoader().load('./assets/Sitting_Chibi.fbx', object => {
 }, showModelError);
 
 async function initializeAvatar(object) {
-  const faceTextures = await loadFaceTextures();
+  const faceTextures = makeFallbackFaceTextures();
   model = object;
-  const faceMaterial = createFaceMaterial(faceTextures);
+  let faceMaterial = createFaceMaterial(faceTextures);
   const bodyMaterial = createBodyMaterial();
   object.traverse(node => {
     if (node.isMesh) {
@@ -612,10 +628,27 @@ async function initializeAvatar(object) {
   bodySwayPivot.updateWorldMatrix(true,true);
   bodyRestMatrix.copy(bodySwayPivot.matrixWorld);
   bodySwayStarted = performance.now();
-  const readyStatus = headPivot ? 'モデルを読み込みました' : 'モデルを読み込みました（頭部パーツ未検出）';
-  const textureWarning = window.avatarTextureWarnings && window.avatarTextureWarnings.length;
-  setStatus(textureWarning ? `${readyStatus}（一部顔画像の代替表示）` : readyStatus);
-  window.avatarStatus = textureWarning ? `${readyStatus}（一部顔画像の代替表示）` : readyStatus;
+  const readyStatus = headPivot ? 'モデルを表示中' : 'モデルを表示中（頭部パーツ未検出）';
+  setStatus(`${readyStatus}（顔画像を読み込み中）`);
+  window.avatarStatus = `${readyStatus}（顔画像を読み込み中）`;
+  try {
+    const loadedTextures = await loadFaceTextures();
+    const loadedFaceMaterial = createFaceMaterial(loadedTextures);
+    object.traverse(node => {
+      if (node.isMesh && node.name.toLowerCase().includes('head')) node.material = loadedFaceMaterial;
+    });
+    const oldUniformIndex = faceUniforms.findIndex(item => item.uniforms === faceMaterial.uniforms);
+    if (oldUniformIndex >= 0) faceUniforms.splice(oldUniformIndex, 1);
+    faceMaterial.dispose();
+    faceMaterial = loadedFaceMaterial;
+    const textureWarning = window.avatarTextureWarnings && window.avatarTextureWarnings.length;
+    setStatus(textureWarning ? `${readyStatus}（一部顔画像の代替表示）` : 'モデルを読み込みました');
+    window.avatarStatus = textureWarning ? `${readyStatus}（一部顔画像の代替表示）` : 'モデルを読み込みました';
+  } catch (error) {
+    console.warn('顔画像の読込に失敗しました。代替表示を続けます。', error);
+    setStatus(`${readyStatus}（顔画像は代替表示）`);
+    window.avatarStatus = `${readyStatus}（顔画像は代替表示）`;
+  }
 }
 
 window.setAvatarOrbit = degrees => { avatar.rotation.y = THREE.MathUtils.degToRad(Number(degrees) || 0); };
