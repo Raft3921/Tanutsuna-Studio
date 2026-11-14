@@ -6,10 +6,9 @@ import sys
 import time
 from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QSettings
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication,QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QGroupBox,
     QLabel,QPushButton,QComboBox,QSlider,QCheckBox,QFileDialog,QMessageBox,QSplitter,QDoubleSpinBox,QScrollArea)
-from .avatar_view import AvatarViewport
+from .raft_avatar import RaftAvatarView, AvatarAssetServer
 from .tracking import Pose, TrackerServer, smooth_pose
 from .mouth import VOWELS, LABELS, DEFAULT_SHAPES, dimensions
 
@@ -19,8 +18,8 @@ class AvatarOutput(QDialog):
         super().__init__(parent,Qt.WindowType.Window)
         self.setWindowTitle('V体出力 — たぬつな')
         self.resize(720,720)
-        self.view=AvatarViewport(self,software=software)
-        self.view.background=QColor('#00ff00')
+        self.view=RaftAvatarView(self)
+        self.view.set_background('#00ff00')
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0);layout.addWidget(self.view)
 
 
@@ -58,7 +57,8 @@ class VtuberPanel(QWidget):
         controls.addStretch()
         outer.addLayout(controls)
         split=QSplitter()
-        self.viewport=AvatarViewport(self)
+        self.viewport=RaftAvatarView(self)
+        self.viewport.set_background('#4b535c')
         split.addWidget(self.viewport)
         settings=QWidget();right=QVBoxLayout(settings)
         group=QGroupBox('手動の可動確認');form=QFormLayout(group)
@@ -99,15 +99,13 @@ class VtuberPanel(QWidget):
         self.background=QComboBox();self.background.addItems(['グレー','緑（別素材用）','青（確認用）'])
         form.addRow('出力の背景',self.background)
         self.compatibility=QCheckBox('互換表示（3Dが表示されない場合）')
-        self.compatibility.setChecked(self.viewport.software)
-        self.compatibility.toggled.connect(self.switch_renderer)
-        form.addRow(self.compatibility)
-        output=QPushButton('たぬきだけの出力画面を開く');output.clicked.connect(self.open_output)
+        self.compatibility.hide()
+        output=QPushButton('V体だけの出力画面を開く');output.clicked.connect(self.open_output)
         form.addRow(output)
         right.addWidget(camera)
         self.record_button=QPushButton('動きを記録…');self.record_button.clicked.connect(self.toggle_recording)
         right.addWidget(self.record_button)
-        model_button=QPushButton('3Dモデル（GLB）を保存…');model_button.clicked.connect(self.export_model)
+        model_button=QPushButton('3Dモデル（FBX）を保存…');model_button.clicked.connect(self.export_model)
         right.addWidget(model_button)
         right.addStretch();scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(settings);split.addWidget(scroll);split.setSizes([500,340])
         outer.addWidget(split,1)
@@ -115,9 +113,9 @@ class VtuberPanel(QWidget):
         self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText)
         outer.addWidget(self.status)
         help_text=('Windows版はデスクトップアプリです。Windows「設定 > プライバシーとセキュリティ」でカメラとマイクの「デスクトップ アプリにアクセスを許可する」をオンにしてください。個別の許可ダイアログは表示されません。映像は保存・送信せず、顔の動きはPC内で処理します。' if sys.platform=='win32' else 'カメラ追跡はこのソフト内で自動開始します。初回のみOSのカメラ・マイク許可が必要です。映像は保存・送信せず、顔の動きはPC内で処理します。')
-        help_=QLabel(help_text+' サングラスは固定、耳の揺れは補助アニメーションです。')
+        help_=QLabel(help_text+' 目と口の表情、髪の揺れは取り込んだモデルに合わせて表示します。')
         help_.setWordWrap(True);outer.addWidget(help_)
-        self.render_status=QLabel('3D描画：互換表示' if self.viewport.software else '3D描画：準備中')
+        self.render_status=QLabel('3D描画：Raftモデルを読み込み中')
         self.render_status.setWordWrap(True);outer.addWidget(self.render_status)
         self.viewport.backendChanged.connect(self.renderer_changed)
         self.timer=QTimer(self);self.timer.setInterval(120 if self.viewport.software else 33);self.timer.timeout.connect(self.tick);self.timer.start()
@@ -270,7 +268,8 @@ class VtuberPanel(QWidget):
         self.viewport.orbit=self.orbit.value()
         if self.viewport.isVisible():self.viewport.update_pose(self.pose,t)
         if self.output and self.output.isVisible():
-            self.output.view.background=QColor(['#4b535c','#00ff00','#0000ff'][self.background.currentIndex()])
+            self.output.view.set_background(['#4b535c','#00ff00','#0000ff'][self.background.currentIndex()])
+            self.output.view.orbit=self.orbit.value()
             self.output.view.update_pose(self.pose,t)
         if self.recording:
             frame={'time':round(now-self.record_start,4),'source':['manual','demo','camera'][mode],'detected':detected,'pose':self.pose.__dict__}
@@ -295,9 +294,9 @@ class VtuberPanel(QWidget):
         except Exception as exc:QMessageBox.warning(self,'記録できません',str(exc))
 
     def export_model(self):
-        file,_=QFileDialog.getSaveFileName(self,'3Dモデルを保存','tanutsuna-tanuki.glb','glTFモデル (*.glb)')
+        file,_=QFileDialog.getSaveFileName(self,'3Dモデルを保存','sitting-chibi.fbx','FBXモデル (*.fbx)')
         if file:
-            try:shutil.copy2(Path(__file__).parent/'assets/tanuki/tanuki.glb',file)
+            try:shutil.copy2(Path(__file__).parent/'assets/avatar/assets/Sitting_Chibi.fbx',file)
             except Exception as exc:QMessageBox.warning(self,'モデルを保存できません',str(exc))
 
     def shutdown(self):
@@ -305,3 +304,4 @@ class VtuberPanel(QWidget):
         if self.recording:self.recording.close();self.recording=None
         if self.output:self.output.view.release();self.output.close()
         self.viewport.release()
+        AvatarAssetServer.stop()
