@@ -6,9 +6,9 @@ import copy
 import os
 import math
 import sys
-from PySide6.QtCore import Qt,QTimer,QSize,QRect,QUrl,QMicrophonePermission
+from PySide6.QtCore import Qt,QTimer,QSize,QRect,QUrl,QMicrophonePermission,QPointF
 from PySide6.QtGui import (QImage,QPainter,QColor,QPixmap,QDesktopServices,QLinearGradient,
- QRadialGradient,QPointF,QPen,QPainterPath)
+ QRadialGradient,QPen,QPainterPath)
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QComboBox,
  QLineEdit,QCheckBox,QFormLayout,QDoubleSpinBox,QSlider,QProgressBar,QFileDialog,QScrollArea,QApplication,QFrame)
 from PySide6.QtMultimedia import QWindowCapture,QVideoSink,QMediaCaptureSession,QMediaDevices
