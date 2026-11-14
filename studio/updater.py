@@ -57,6 +57,31 @@ def installation_root() -> Path | None:
     return None
 
 
+def installed_version() -> str:
+    """Read the version stamped into the installed package, not just this module."""
+    root = installation_root()
+    if root:
+        if sys.platform == "darwin":
+            plist = root / "Contents" / "Info.plist"
+            try:
+                with plist.open("rb") as source:
+                    value = plistlib.load(source).get("CFBundleShortVersionString")
+                if value:
+                    _version(value)
+                    return str(value)
+            except (OSError, ValueError, plistlib.InvalidFileException):
+                pass
+        else:
+            try:
+                value = json.loads((root / "studio-manifest.json").read_text(encoding="utf-8")).get("studioVersion")
+                if value:
+                    _version(value)
+                    return str(value)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+    return STUDIO_VERSION
+
+
 def request_json(url: str) -> dict:
     request = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
@@ -71,7 +96,8 @@ def latest_release() -> dict:
     release = request_json(API)
     tag = release.get("tag_name", "")
     latest = _version(tag)
-    current = _version(STUDIO_VERSION)
+    installed = installed_version()
+    current = _version(installed)
     if latest <= current:
         return {"available": False, "version": tag or STUDIO_VERSION}
     wanted = f"Tanutsuna-Studio-{packaged_platform()}.zip"
@@ -79,7 +105,7 @@ def latest_release() -> dict:
         return {"available": True, "version": tag, "unsupported": True,
                 "url": release.get("html_url", "")}
     asset = next((item for item in release.get("assets", []) if item.get("name") == wanted), None)
-    delta_name = f"Tanutsuna-Studio-{packaged_platform()}-from-{STUDIO_VERSION}.zip"
+    delta_name = f"Tanutsuna-Studio-{packaged_platform()}-from-{installed}.zip"
     delta = next((item for item in release.get("assets", []) if item.get("name") == delta_name), None)
     # A Mac app delta cannot be re-signed on the user's machine because the
     # distribution certificate's private key is only available to the builder.
@@ -97,7 +123,7 @@ def latest_release() -> dict:
     return {"available": True, "version": tag, "url": asset["browser_download_url"],
             "size": int(asset.get("size", 0)), "sha256": digest[7:],
             "asset": asset["name"], "delta": bool(delta),
-            "from_version": STUDIO_VERSION if delta else "",
+            "from_version": installed if delta else "",
             "release_url": release.get("html_url", "")}
 
 

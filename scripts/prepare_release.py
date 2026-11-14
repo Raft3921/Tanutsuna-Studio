@@ -12,7 +12,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / 'studio/version.py').read_text(encoding='utf-8').split('STUDIO_VERSION = "', 1)[1].split('"', 1)[0]
-BASE_VERSION = '1.4.14'
+BASE_VERSION = os.environ.get('STUDIO_BASE_VERSION', '1.4.14')
 BUILD = ROOT / 'build/release'
 DIST = ROOT / 'dist'
 
@@ -66,7 +66,7 @@ def extract_macos(path):
     subprocess.run(['/usr/bin/ditto', '-x', '-k', str(path), str(destination)], check=True)
     app = destination / 'Tanutsuna Studio.app'
     if not app.is_dir():
-        raise RuntimeError('1.4.14 Mac archive has no Tanutsuna Studio.app')
+        raise RuntimeError(f'{BASE_VERSION} Mac archive has no Tanutsuna Studio.app')
     return app
 
 
