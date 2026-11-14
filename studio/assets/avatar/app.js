@@ -465,9 +465,15 @@ function showModelError(error) {
   setStatus('モデルを読み込めません');
 }
 
+window.avatarStatus = 'FBXモデルを読み込み中';
 new FBXLoader().load('./assets/Sitting_Chibi.fbx', object => {
+  window.avatarStatus = 'モデルのテクスチャを読み込み中';
   initializeAvatar(object).catch(showModelError);
-}, undefined, showModelError);
+}, event => {
+  if (event.lengthComputable) {
+    window.avatarStatus = `FBXモデルを読み込み中 ${Math.round(event.loaded / event.total * 100)}%`;
+  }
+}, showModelError);
 
 async function initializeAvatar(object) {
   const faceTextures = await loadFaceTextures();
@@ -576,6 +582,7 @@ async function initializeAvatar(object) {
   bodyRestMatrix.copy(bodySwayPivot.matrixWorld);
   bodySwayStarted = performance.now();
   setStatus(headPivot ? 'モデルを読み込みました' : 'モデルを読み込みました（頭部パーツ未検出）');
+  window.avatarStatus = headPivot ? 'モデルを読み込みました' : 'モデルを読み込みました（頭部パーツ未検出）';
 }
 
 window.setAvatarOrbit = degrees => { avatar.rotation.y = THREE.MathUtils.degToRad(Number(degrees) || 0); };
@@ -598,8 +605,13 @@ window.updateAvatarPose = pose => {
 window.updateAvatarPose({});
 window.captureAvatarFrame = () => {
   if (window.avatarError) return `error:${window.avatarError}`;
-  if (!model) return '';
-  return renderer.domElement.toDataURL('image/png');
+  if (!model) return `loading:${window.avatarStatus || 'モデルを準備しています'}`;
+  try {
+    return renderer.domElement.toDataURL('image/png');
+  } catch (error) {
+    window.avatarError = `プレビュー画像を取得できません: ${error && error.message || error}`;
+    return `error:${window.avatarError}`;
+  }
 };
 
 let previousRenderTime = performance.now();

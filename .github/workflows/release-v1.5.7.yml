@@ -1,0 +1,71 @@
+name: Publish Studio 1.5.7
+
+on:
+  push:
+    tags:
+      - v1.5.7
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.5.7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Confirm Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+
+      - name: Install Mac build dependencies
+        run: python -m pip install PySide6==6.12.0 PyInstaller numpy==2.5.4 certifi==2026.7.22
+
+      - name: Download 1.5.6 base builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build/release-download
+          gh release download v1.5.6 --repo Raft3921/Tanutsuna-Studio \
+            --pattern 'Tanutsuna-Studio-macOS-arm64.zip' \
+            --pattern 'Tanutsuna-Studio-Windows11-x64.zip' \
+            --dir build/release-download
+
+      - name: Prepare Windows update and Mac Cut Raft source
+        env:
+          STUDIO_BASE_VERSION: 1.5.6
+        run: >-
+          python scripts/prepare_release.py
+          --base-windows build/release-download/Tanutsuna-Studio-Windows11-x64.zip
+          --base-macos build/release-download/Tanutsuna-Studio-macOS-arm64.zip
+
+      - name: Build Mac speech runtime
+        run: python scripts/prepare_speech.py
+
+      - name: Build Mac app
+        run: python scripts/build_mac.py
+
+      - name: Package Mac, delta, and installers
+        env:
+          STUDIO_BASE_VERSION: 1.5.6
+        run: python scripts/prepare_release.py --finish
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.5.7 \
+            dist/Tanutsuna-Studio-Installer.zip \
+            dist/Tanutsuna-Studio-macOS-arm64.zip \
+            dist/Tanutsuna-Studio-Windows11-x64.zip \
+            dist/Tanutsuna-Studio-macOS-arm64-from-1.5.6.zip \
+            dist/Tanutsuna-Studio-Windows11-x64-from-1.5.6.zip \
+            --repo Raft3921/Tanutsuna-Studio \
+            --title 'たぬつな Studio 1.5.7' \
+            --notes-file docs/release-1.5.7.md

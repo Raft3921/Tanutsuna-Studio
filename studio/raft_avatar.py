@@ -78,6 +78,7 @@ class RaftAvatarView(QWebEngineView):
         self._loaded = False
         self._frame = QImage()
         self._capture_pending = False
+        self._capture_pending_since = 0.
         self._last_capture_request = 0.
         self._model_status = ''
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -117,14 +118,30 @@ class RaftAvatarView(QWebEngineView):
     def capture_frame(self):
         """Capture the original Three.js canvas, retaining its transparent pixels."""
         now=time.monotonic()
+        if self._capture_pending and now-self._capture_pending_since>8:
+            self._capture_pending=False
+            status='3D描画の応答がありません（GPU/WebGLを確認してください）'
+            if status!=self._model_status:
+                self._model_status=status;self.backendChanged.emit(False,status)
         if not self._loaded or self._capture_pending or now-self._last_capture_request<1/30:
             return self._frame
-        self._capture_pending=True;self._last_capture_request=now
-        self.page().runJavaScript("window.captureAvatarFrame ? window.captureAvatarFrame() : (window.avatarError ? 'error:' + window.avatarError : '')",self._receive_frame)
+        self._capture_pending=True;self._capture_pending_since=now;self._last_capture_request=now
+        self.page().runJavaScript("(()=>{try{return window.captureAvatarFrame ? window.captureAvatarFrame() : 'error:3Dプレビューの初期化が完了していません'}catch(e){return 'error:プレビュー応答エラー: '+(e&&e.message||e)}})()",self._receive_frame)
         return self._frame
 
     def _receive_frame(self,result):
         self._capture_pending=False
+        self._capture_pending_since=0.
+        if isinstance(result,str) and result.startswith('loading:'):
+            status=result[8:]
+            if status!=self._model_status:
+                self._model_status=status;self.backendChanged.emit(False,status)
+            return
+        if result is None:
+            status='3Dプレビューから描画結果が返りません'
+            if status!=self._model_status:
+                self._model_status=status;self.backendChanged.emit(False,status)
+            return
         if isinstance(result,str) and result.startswith('error:'):
             status='モデルを読み込めません: '+result[6:]
             if status!=self._model_status:
