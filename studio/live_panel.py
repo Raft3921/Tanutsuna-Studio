@@ -36,6 +36,14 @@ class LivePanel(QWidget):
             QTabBar::tab:selected { background:#173440; color:#d8faf2; border-color:#44c9ad; }
             QGroupBox { color:#d9f3f4; background:#0c202b; border:1px dotted #2d6670; border-radius:10px; margin-top:12px; padding:10px; font-weight:700; }
             QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 6px; color:#73dfc7; }
+            QWidget#LiveLayoutTab, QWidget#LiveChatTab, QWidget#LiveAudioTab { background:#081e29; color:#e4f4f7; }
+            QWidget#LiveLayoutTab QLabel, QWidget#LiveChatTab QLabel, QWidget#LiveAudioTab QLabel { color:#d8edf1; background:transparent; }
+            QWidget#LiveLayoutTab QCheckBox, QWidget#LiveChatTab QCheckBox, QWidget#LiveAudioTab QCheckBox { color:#e4f4f7; spacing:8px; }
+            QWidget#LiveLayoutTab QCheckBox::indicator, QWidget#LiveChatTab QCheckBox::indicator, QWidget#LiveAudioTab QCheckBox::indicator { width:18px; height:18px; background:#102d38; border:2px solid #6c929c; border-radius:4px; }
+            QWidget#LiveLayoutTab QCheckBox::indicator:checked, QWidget#LiveChatTab QCheckBox::indicator:checked, QWidget#LiveAudioTab QCheckBox::indicator:checked { background:#11b9a5; border:2px solid #b0fff0; }
+            QWidget#LiveLayoutTab QComboBox, QWidget#LiveLayoutTab QDoubleSpinBox, QWidget#LiveChatTab QComboBox, QWidget#LiveChatTab QDoubleSpinBox, QWidget#LiveChatTab QLineEdit, QWidget#LiveAudioTab QComboBox, QWidget#LiveAudioTab QDoubleSpinBox { color:#153b48; background:#f8fcfd; }
+            QWidget#LiveLayoutTab QPushButton, QWidget#LiveChatTab QPushButton, QWidget#LiveAudioTab QPushButton { color:#153b48; }
+            QScrollArea#LiveControls { background:#081e29; border:1px solid #24424d; border-radius:12px; }
             QSlider::groove:horizontal { height:4px; background:#25434e; border-radius:2px; }
             QSlider::handle:horizontal { width:12px; margin:-5px 0; background:#65dfc2; border:1px solid #b4fff0; border-radius:6px; }
         ''')
@@ -48,11 +56,11 @@ class LivePanel(QWidget):
         for widget in (self.windows,refresh,self.quality):top.addWidget(widget)
         outer.addLayout(top)
         body=QHBoxLayout()
-        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setMinimumWidth(285);scroll.setMaximumWidth(390);controls=QWidget();settings=QVBoxLayout(controls)
+        scroll=QScrollArea();scroll.setObjectName('LiveControls');scroll.setWidgetResizable(True);scroll.setMinimumWidth(285);scroll.setMaximumWidth(390);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);controls=QWidget();settings=QVBoxLayout(controls)
         self.control_tabs=QTabWidget();settings.addWidget(self.control_tabs)
-        layout_tab=QWidget();layout_box=QVBoxLayout(layout_tab);self.control_tabs.addTab(layout_tab,'● レイアウト')
-        chat_tab=QWidget();chat_box=QVBoxLayout(chat_tab);self.control_tabs.addTab(chat_tab,'● チャット')
-        audio_tab=QWidget();audio_box=QVBoxLayout(audio_tab);self.control_tabs.addTab(audio_tab,'● 音声')
+        layout_tab=QWidget();layout_tab.setObjectName('LiveLayoutTab');layout_box=QVBoxLayout(layout_tab);self.control_tabs.addTab(layout_tab,'● レイアウト')
+        chat_tab=QWidget();chat_tab.setObjectName('LiveChatTab');chat_box=QVBoxLayout(chat_tab);self.control_tabs.addTab(chat_tab,'● チャット')
+        audio_tab=QWidget();audio_tab.setObjectName('LiveAudioTab');audio_box=QVBoxLayout(audio_tab);self.control_tabs.addTab(audio_tab,'● 音声')
         self.avatar=QCheckBox('ラフトV体を表示');self.avatar.setChecked(bool(self.saved_preferences.get('avatar',True)));layout_box.addWidget(self.avatar)
         self.avatar_model=QComboBox();self.avatar_model.addItem('ラフトV体','raft');self.avatar_model.addItem('たぬつなV体','tanuki')
         self.avatar_model.setCurrentIndex(max(0,self.avatar_model.findData(desk.vtuber.avatar_model)))
@@ -147,11 +155,11 @@ class LivePanel(QWidget):
         self.live_avatar.setVisible(self.avatar.isChecked() and desk.vtuber.avatar_model=='raft')
         self.tanuki_avatar.setVisible(self.avatar.isChecked() and desk.vtuber.avatar_model=='tanuki')
         self.avatar.toggled.connect(self.update_avatar_visibility)
-        from PySide6.QtWebEngineWidgets import QWebEngineView
-        self.chat_view=QWebEngineView(self.preview);self.chat_view.hide()
-        self.chat_view.loadFinished.connect(self.chat_loaded)
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        self.chat_page=QWebEnginePage(self);self.chat_page.loadFinished.connect(self.chat_loaded)
+        self.chat_messages=[];self.chat_page_ready=False
         self.chat_overlay_enabled.toggled.connect(self.chat_overlay_changed);self.chat_url.editingFinished.connect(self.load_chat_overlay)
-        self.chat_capture_timer=QTimer(self);self.chat_capture_timer.setInterval(500);self.chat_capture_timer.timeout.connect(self.capture_chat_overlay)
+        self.chat_capture_timer=QTimer(self);self.chat_capture_timer.setInterval(1000);self.chat_capture_timer.timeout.connect(self.refresh_chat_messages)
         if self.chat_overlay_enabled.isChecked():QTimer.singleShot(250,lambda:self.chat_overlay_changed(True))
         outer.addLayout(body,1)
         self.record=QCheckBox('同時に録画して、終了後に編集へ保存する');self.record.setChecked(bool(self.saved_preferences.get('record',False)));outer.addWidget(self.record)
@@ -190,7 +198,7 @@ class LivePanel(QWidget):
         for widget in (*self.transforms.values(),*self.gains.values()):widget.valueChanged.connect(self.schedule_preferences_save)
         self.server.textChanged.connect(self.schedule_preferences_save)
         self.chat_overlay_enabled.toggled.connect(self.schedule_preferences_save);self.chat_url.editingFinished.connect(self.schedule_preferences_save)
-        self.chat_names_enabled.toggled.connect(self.apply_chat_preferences);self.chat_names_enabled.toggled.connect(self.schedule_preferences_save)
+        self.chat_names_enabled.toggled.connect(self.schedule_preferences_save)
         for field in (*self.game_transforms.values(),*self.media_transforms.values(),*self.chat_transforms.values()):field.valueChanged.connect(self.schedule_preferences_save)
         self.refresh_windows();self.update_mix();self.update_buttons();QTimer.singleShot(0,self.load_secret)
         if self.windows.currentData() is None:self.status.setText('先にゲームのウィンドウを選択してください。映像確認にYouTubeキーは不要です。')
@@ -261,15 +269,9 @@ class LivePanel(QWidget):
 
     def chat_overlay_changed(self,enabled):
         if enabled:
-            self.position_chat_view();self.chat_view.setVisible(True);self.chat_view.raise_()
             self.chat_status.setText('チャットページを読み込み中…');self.stage_status.setText('● CHAT LOADING');self.load_chat_overlay();self.chat_capture_timer.start()
         else:
-            self.chat_view.hide()
             self.chat_capture_timer.stop();self.chat_status.setText('チャット OFF');self.stage_status.setText('● DOT LIVE')
-
-    def position_chat_view(self):
-        w=max(160,round(self.preview.width()*.28));h=max(120,round(self.preview.height()*.70))
-        self.chat_view.setGeometry(self.preview.width()-w-8,8,w,h)
 
     def load_chat_overlay(self):
         from .youtube_panel import video_id_from_url
@@ -282,43 +284,60 @@ class LivePanel(QWidget):
         self.desk.workspace.data.setdefault('live',{})['video_url']=self.chat_url.text().strip();self.desk.workspace.save()
         if getattr(self,'chat_video_id','')!=video_id:
             self.chat_video_id=video_id
-            self.chat_pixmap=QImage()
+            self.chat_messages=[];self.chat_page_ready=False
             self.chat_status.setText('チャットページを読み込み中…')
-            self.position_chat_view()
-            self.chat_view.setUrl(QUrl('https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v='+video_id))
-        elif not getattr(self,'chat_pixmap',QImage()).isNull():
-            self.chat_status.setText('配信映像へ反映中')
-            QTimer.singleShot(250,self.capture_chat_overlay)
+            self.chat_page.setUrl(QUrl('https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v='+video_id))
 
     def chat_loaded(self,ok):
-        state=('チャットページ読込済み・配信映像へ反映中…' if ok else 'チャットページを読み込めません') if self.chat_overlay_enabled.isChecked() else 'チャット OFF'
-        self.chat_status.setText(state);self.stage_status.setText('● CHAT CAPTURING' if ok else '● CHAT ERROR')
-        if ok:
-            self.apply_chat_preferences()
-            self.position_chat_view();self.chat_view.setVisible(True);self.chat_view.raise_()
-            QTimer.singleShot(350,self.capture_chat_overlay)
-
-    def capture_chat_overlay(self):
         if not self.chat_overlay_enabled.isChecked():return
-        w=max(160,round(self.preview.width()*.28));h=max(120,round(self.preview.height()*.70))
-        self.chat_view.setGeometry(self.preview.width()-w-8,8,w,h);self.chat_view.raise_()
-        image=self.chat_view.grab().toImage()
-        if not image.isNull():
-            self.chat_pixmap=image
-            self.chat_status.setText('配信映像に反映中');self.stage_status.setText('● CHAT IN PROGRAM')
+        self.chat_page_ready=bool(ok)
+        if not ok:
+            self.chat_status.setText('チャットを読み込めません。配信URL・公開範囲・ネット接続を確認してください')
+            self.stage_status.setText('● CHAT ERROR');return
+        self.chat_status.setText('チャット接続済み・新着を待っています');self.stage_status.setText('● CHAT READY')
+        self.refresh_chat_messages()
 
-    def apply_chat_preferences(self,*_):
-        if not getattr(self,'chat_view',None):return
-        show_names=self.chat_names_enabled.isChecked()
-        script=f'''(()=>{{const show={str(show_names).lower()};const walk=root=>{{for(const el of root.querySelectorAll('*')){{if(el.matches('#author-name,yt-live-chat-author-chip'))el.style.display=show?'':'none';if(el.shadowRoot)walk(el.shadowRoot)}}}};walk(document);return 'ok'}})()'''
-        self.chat_view.page().runJavaScript(script)
+    def refresh_chat_messages(self):
+        if not self.chat_overlay_enabled.isChecked() or not self.chat_page_ready:return
+        script=r'''(()=>{
+          const rows=[];const seen=new Set();
+          const text=(root,selector)=>{
+            if(!root)return '';
+            const direct=root.querySelector(selector);
+            if(direct)return (direct.innerText||direct.textContent||'').trim();
+            for(const node of root.querySelectorAll('*'))if(node.shadowRoot){const value=text(node.shadowRoot,selector);if(value)return value}
+            return '';
+          };
+          const walk=root=>{for(const node of root.querySelectorAll('*')){
+            const tag=node.tagName.toLowerCase();
+            if(/^yt-live-chat-(text-message-renderer|paid-message-renderer|paid-sticker-renderer|membership-item-renderer)$/.test(tag)&&!seen.has(node)){
+              seen.add(node);const author=text(node,'#author-name');
+              const message=text(node,'#message')||text(node,'#purchase-amount')||text(node,'#header-subtext');
+              if(author||message)rows.push({author:author.slice(0,80),message:message.slice(0,500)});
+            }
+            if(node.shadowRoot)walk(node.shadowRoot);
+          }};
+          walk(document);return rows.slice(-10);
+        })()'''
+        self.chat_page.runJavaScript(script,self.chat_messages_updated)
+
+    def chat_messages_updated(self,rows):
+        if not self.chat_overlay_enabled.isChecked() or not isinstance(rows,list):return
+        messages=[]
+        for row in rows[-10:]:
+            if isinstance(row,dict):
+                author=str(row.get('author','')).strip()[:80];message=str(row.get('message','')).strip()[:500]
+                if author or message:messages.append({'author':author,'message':message})
+        self.chat_messages=messages
+        if messages:
+            self.chat_status.setText(f'配信映像に表示中 · {len(messages)}件');self.stage_status.setText('● CHAT IN PROGRAM')
+        elif self.chat_page_ready:
+            self.chat_status.setText('チャット接続済み・新着を待っています');self.stage_status.setText('● CHAT READY')
 
     def paint_chat_overlay(self,frame):
-        image=getattr(self,'chat_pixmap',QImage())
-        if not self.chat_overlay_enabled.isChecked() or image.isNull():return
+        if not self.chat_overlay_enabled.isChecked():return
         width,height=frame.width(),frame.height();opts=self.chat_transforms
         box_w=max(100,round(width*opts['width'].value()/100));box_h=max(100,round(height*opts['height'].value()/100))
-        overlay=image.scaled(box_w-10,box_h-48,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation)
         cx=round(width*opts['x'].value()/100);cy=round(height*opts['y'].value()/100)
         x=max(0,min(width-box_w,cx-box_w//2));y=max(0,min(height-box_h,cy-box_h//2));rect=QRect(x,y,box_w,box_h)
         painter=QPainter(frame);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -326,8 +345,25 @@ class LivePanel(QWidget):
         painter.setPen(QPen(QColor(84,180,168,alpha),max(1,round(width/1200))))
         painter.setBrush(QColor(7,19,29,min(230,alpha+45)));painter.drawRoundedRect(rect,18,18)
         painter.save();path=QPainterPath();path.addRoundedRect(QRect(x+5,y+5,box_w-10,box_h-10),14,14);painter.setClipPath(path)
-        painter.setOpacity(.97);painter.drawImage(QRect(x+5,y+42,box_w-10,box_h-47),overlay);painter.restore()
-        painter.setPen(QColor(189,246,232,alpha));painter.drawText(QRect(x+14,y+9,box_w-28,26),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'LIVE CHAT')
+        base_font=painter.font();base_font.setPixelSize(max(16,round(width/105)))
+        painter.setFont(base_font)
+        painter.setPen(QColor(189,246,232,alpha));painter.drawText(QRect(x+14,y+8,box_w-28,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'LIVE CHAT')
+        messages=getattr(self,'chat_messages',[])[-10:]
+        body=QRect(x+14,y+43,box_w-28,box_h-54)
+        if not messages:
+            painter.setPen(QColor(194,218,225,alpha));painter.drawText(body,Qt.AlignmentFlag.AlignCenter,'チャットを待っています…')
+        else:
+            row_h=max(48,body.height()//min(6,len(messages)));visible=messages[-max(1,body.height()//row_h):]
+            for index,item in enumerate(visible):
+                row_y=body.y()+index*row_h
+                if index:painter.setPen(QPen(QColor(93,137,147,90),1));painter.drawLine(x+14,row_y,rect.right()-14,row_y)
+                cursor=row_y+5
+                if self.chat_names_enabled.isChecked() and item['author']:
+                    author_font=painter.font();author_font.setPixelSize(max(13,round(width/130)));painter.setFont(author_font)
+                    painter.setPen(QColor(116,226,204,alpha));painter.drawText(QRect(x+14,cursor,box_w-28,20),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,item['author']);cursor+=20
+                    painter.setFont(base_font)
+                painter.setPen(QColor(241,248,249,alpha));painter.drawText(QRect(x+14,cursor,box_w-28,max(20,row_h-(cursor-row_y)-4)),Qt.TextFlag.TextWordWrap,item['message'])
+        painter.restore()
         painter.end()
 
     def update_opening_frame(self,*_):
@@ -680,8 +716,7 @@ class LivePanel(QWidget):
                 self.update_mix()
         else:
             program=self.scene_frame(self.current_scene,game_program,avatar,now,width,height)
-        if self.current_scene!='intro' or (self.scene_transition and self.scene_transition.get('to')=='game'):
-            self.paint_chat_overlay(program)
+        self.paint_chat_overlay(program)
         self.engine.submit_frame(program,screen,pose,transform);self.tick_count+=1;self.fps_frames+=1
         elapsed=time.monotonic()-self.fps_epoch
         if elapsed>=1.:
@@ -706,24 +741,42 @@ class LivePanel(QWidget):
         painter=QPainter(frame)
         if not self.background_frame.isNull():painter.drawImage(0,0,self.background_frame)
         if name=='intro':
-            # The opening is a quiet, self-contained scene. The GIF loops until
-            # the streamer explicitly switches to the game scene.
-            painter.fillRect(frame.rect(),QColor(4,10,18,132))
-            margin=max(28,round(width*.06));card=QRect(margin,margin,width-margin*2,height-margin*2)
-            painter.setPen(QPen(QColor(91,224,194,210),max(2,round(width/700))))
-            painter.setBrush(QColor(5,17,27,224));painter.drawRoundedRect(card,24,24)
-            painter.setPen(QColor('#70e8ce'))
-            painter.drawText(QRect(card.x()+32,card.y()+22,card.width()-64,34),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'TANUTSUNA STUDIO   /   LIVE SESSION')
-            side=min(round(height*.52),round(width*.30));gif_rect=QRect(card.x()+42,card.center().y()-side//2,side,side)
+            # Use the supplied Minecraft GIF as a soft full-screen scene and
+            # keep its pixel art crisp in the foreground, like a game title screen.
             if not self.opening_frame.isNull():
-                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-                painter.drawImage(gif_rect,self.opening_frame)
-            painter.setPen(QColor('#f2fbff'))
-            painter.drawText(QRect(gif_rect.right()+36,card.y()+round(card.height()*.30),card.right()-gif_rect.right()-65,60),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'NOW LOADING')
-            painter.setPen(QColor('#c5d9e2'))
-            painter.drawText(QRect(gif_rect.right()+36,card.y()+round(card.height()*.44),card.right()-gif_rect.right()-65,70),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'シーンを切り替えると配信が始まります')
-            painter.setPen(QColor('#70e8ce'))
-            painter.drawText(QRect(gif_rect.right()+36,card.y()+round(card.height()*.68),card.right()-gif_rect.right()-65,34),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'WAITING FOR SCENE  /  AUDIO MUTED')
+                backdrop=self.opening_frame.scaled(QSize(width,height),Qt.AspectRatioMode.KeepAspectRatioByExpanding,Qt.TransformationMode.SmoothTransformation)
+                source=QRect((backdrop.width()-width)//2,(backdrop.height()-height)//2,width,height)
+                painter.drawImage(frame.rect(),backdrop,source)
+            painter.fillRect(frame.rect(),QColor(7,13,16,205))
+            scale=max(1,min(3,height//280));side=200*scale
+            art=QRect(round(width*.13),round(height*.50-side/2),side,side)
+            painter.fillRect(art.adjusted(-10,-10,10,10),QColor('#101c1b'))
+            painter.setPen(QPen(QColor('#657a58'),2));painter.drawRect(art.adjusted(-10,-10,10,10))
+            if not self.opening_frame.isNull():
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,False)
+                painter.drawImage(art,self.opening_frame.scaled(side,side,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.FastTransformation))
+            tx=art.right()+round(width*.045);tw=max(180,width-tx-round(width*.12))
+            painter.setPen(QColor('#a8c981'))
+            painter.drawText(QRect(tx,round(height*.29),tw,36),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'RAFT  /  LIVE STREAM')
+            painter.setPen(QColor('#f4f0dc'))
+            painter.drawText(QRect(tx,round(height*.37),tw,74),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'配信準備中')
+            painter.setPen(QPen(QColor('#9ebc68'),max(3,round(width/500))))
+            painter.drawLine(tx,round(height*.49),tx+round(width*.09),round(height*.49))
+            painter.setPen(QColor('#e0dfce'))
+            painter.drawText(QRect(tx,round(height*.53),tw,64),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'ゲームの開始を待っています')
+            painter.setPen(QColor('#9fb0a1'))
+            hint='シーンを切り替えると配信が始まります'
+            if self.chat_overlay_enabled.isChecked():
+                chat_width=round(width*self.chat_transforms['width'].value()/100)
+                chat_left=round(width*self.chat_transforms['x'].value()/100)-chat_width//2
+                tw=max(180,min(tw,chat_left-tx-36))
+            painter.drawText(QRect(tx,round(height*.62),tw,52),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,hint)
+            bar_y=round(height*.75);cell=max(12,round(width*.012));gap=max(5,round(width*.004));count=8;lit=int(now*2.5)%count
+            for index in range(count):
+                color=QColor('#b7d47a') if index==lit else QColor('#425347')
+                painter.fillRect(QRect(tx+index*(cell+gap),bar_y,cell,8),color)
+            painter.setPen(QColor('#a6b5a1'))
+            painter.drawText(QRect(tx,bar_y+22,tw,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'MIC OFF     PC AUDIO OFF')
             painter.end();return frame
         if avatar is not None and not avatar.isNull():
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
