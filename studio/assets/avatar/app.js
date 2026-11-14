@@ -429,6 +429,7 @@ function imageAssetUrl(file) {
 
 async function loadFaceTextures() {
   const loader = new THREE.TextureLoader();
+  const warnings = [];
   const files = {
     base: 'face-base.png', eyesOpen: 'face-eyes-open.png', pupils: 'face-pupils.png',
     eyeMask: 'face-eye-mask.png', eyebrows: 'face-eyebrows.png', eyesHalf: 'face-eyes-half.png', eyesClosed: 'face-eyes-closed.png',
@@ -437,14 +438,20 @@ async function loadFaceTextures() {
   };
   const entries = await Promise.all(Object.entries(files).map(async ([key, file]) => {
     let texture;
+    let timeout;
     try {
-      texture = await loader.loadAsync(imageAssetUrl(file));
+      texture = await Promise.race([
+        loader.loadAsync(imageAssetUrl(file)),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('画像読み込みがタイムアウトしました')), 8000); })
+      ]);
     } catch (error) {
-      if (key !== 'eyesClosed') throw error;
-      // A missing optional blink image should not prevent the model loading.
-      texture = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
-      texture.userData.missingBlink = true;
-      console.warn('閉じ目画像がないため、瞬きを無効にします:', file);
+      warnings.push(`${file}: ${error && error.message || error}`);
+      const fallback = key === 'base' ? [245, 226, 205, 255] : [0, 0, 0, 0];
+      texture = new THREE.DataTexture(new Uint8Array(fallback), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+      if (key === 'eyesClosed') texture.userData.missingBlink = true;
+      console.warn('顔テクスチャの代替表示を使います:', file, error);
+    } finally {
+      clearTimeout(timeout);
     }
     texture.colorSpace = key === 'eyeMask' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
     texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -455,6 +462,7 @@ async function loadFaceTextures() {
     texture.needsUpdate = true;
     return [key, texture];
   }));
+  window.avatarTextureWarnings = warnings;
   return Object.fromEntries(entries);
 }
 
@@ -581,8 +589,10 @@ async function initializeAvatar(object) {
   bodySwayPivot.updateWorldMatrix(true,true);
   bodyRestMatrix.copy(bodySwayPivot.matrixWorld);
   bodySwayStarted = performance.now();
-  setStatus(headPivot ? 'モデルを読み込みました' : 'モデルを読み込みました（頭部パーツ未検出）');
-  window.avatarStatus = headPivot ? 'モデルを読み込みました' : 'モデルを読み込みました（頭部パーツ未検出）';
+  const readyStatus = headPivot ? 'モデルを読み込みました' : 'モデルを読み込みました（頭部パーツ未検出）';
+  const textureWarning = window.avatarTextureWarnings && window.avatarTextureWarnings.length;
+  setStatus(textureWarning ? `${readyStatus}（一部顔画像の代替表示）` : readyStatus);
+  window.avatarStatus = textureWarning ? `${readyStatus}（一部顔画像の代替表示）` : readyStatus;
 }
 
 window.setAvatarOrbit = degrees => { avatar.rotation.y = THREE.MathUtils.degToRad(Number(degrees) || 0); };
