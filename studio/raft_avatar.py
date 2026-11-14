@@ -8,8 +8,9 @@ import time
 from urllib.parse import unquote, urlsplit
 
 from PySide6.QtCore import Qt, QUrl, Signal, QByteArray
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWidgets import QWidget, QLabel, QStackedLayout
 
 
 ASSETS = Path(__file__).parent / 'assets' / 'avatar'
@@ -143,3 +144,53 @@ class RaftAvatarView(QWebEngineView):
         self._loaded = False
         self._frame=QImage()
         self.setUrl(QUrl('about:blank'))
+
+
+class RaftAvatarPreview(QWidget):
+    """Display the WebGL model through a stable Qt image surface."""
+    backendChanged = Signal(bool, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.view = RaftAvatarView(self)
+        self.image = QLabel(self)
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._background = '#4b535c'
+        self.message = 'Raftモデルを読み込み中'
+        self.image.setStyleSheet(f'background:{self._background};border:none')
+        stack = QStackedLayout(self)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        stack.addWidget(self.view)
+        stack.addWidget(self.image)
+        self.view.backendChanged.connect(self._backend_changed)
+        self.orbit = 0
+
+    def _backend_changed(self, software, message):
+        self.message = message
+        self.backendChanged.emit(software, message)
+
+    def set_background(self, color):
+        self._background = str(color)
+        self.view.set_background(color)
+        self.image.setStyleSheet(f'background:{self._background};border:none')
+
+    def update_pose(self, pose, now=0):
+        self.view.orbit = self.orbit
+        self.view.update_pose(pose, now)
+
+    def capture_frame(self):
+        frame = self.view.capture_frame()
+        if not frame.isNull():
+            canvas = QImage(max(1, self.width()), max(1, self.height()), QImage.Format.Format_RGB32)
+            canvas.fill(QColor(self._background))
+            painter = QPainter(canvas)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawImage(canvas.rect(), frame)
+            painter.end()
+            self.image.setPixmap(QPixmap.fromImage(canvas))
+        return frame
+
+    def release(self):
+        self.view.release()

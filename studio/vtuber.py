@@ -8,7 +8,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QSettings, Signal
 from PySide6.QtWidgets import (QApplication,QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QGroupBox,
     QLabel,QPushButton,QComboBox,QSlider,QCheckBox,QFileDialog,QMessageBox,QSplitter,QDoubleSpinBox,QScrollArea,QStackedWidget)
-from .raft_avatar import RaftAvatarView, AvatarAssetServer
+from .raft_avatar import RaftAvatarPreview, AvatarAssetServer
 from .avatar_view import AvatarViewport
 from .tracking import Pose, TrackerServer, smooth_pose
 from .mouth import VOWELS, LABELS, DEFAULT_SHAPES, dimensions
@@ -20,7 +20,7 @@ class AvatarOutput(QDialog):
         self.setWindowTitle('V体出力 — たぬつな')
         self.resize(720,720)
         self.stack=QStackedWidget(self)
-        self.raft_view=RaftAvatarView(self);self.raft_view.set_background('#00ff00')
+        self.raft_view=RaftAvatarPreview(self);self.raft_view.set_background('#00ff00')
         self.tanuki_view=AvatarViewport(self,software=software);self.tanuki_view.background=QColor('#00ff00')
         self.stack.addWidget(self.raft_view);self.stack.addWidget(self.tanuki_view)
         self.view=self.raft_view;layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0);layout.addWidget(self.stack)
@@ -35,6 +35,7 @@ class AvatarOutput(QDialog):
 
     def set_pose(self,pose,now,orbit):
         self.view.orbit=orbit;self.view.update_pose(pose,now)
+        if self.view is self.raft_view:self.raft_view.capture_frame()
 
 
 class VtuberPanel(QWidget):
@@ -77,7 +78,7 @@ class VtuberPanel(QWidget):
         outer.addLayout(controls)
         split=QSplitter()
         self.view_stack=QStackedWidget(self)
-        self.raft_view=RaftAvatarView(self);self.raft_view.set_background('#4b535c')
+        self.raft_view=RaftAvatarPreview(self);self.raft_view.set_background('#4b535c')
         self.tanuki_view=AvatarViewport(self)
         self.view_stack.addWidget(self.raft_view);self.view_stack.addWidget(self.tanuki_view)
         split.addWidget(self.view_stack)
@@ -169,7 +170,7 @@ class VtuberPanel(QWidget):
         self.viewport=self.raft_view if self.avatar_model=='raft' else self.tanuki_view
         self.view_stack.setCurrentWidget(self.viewport)
         if self.output:self.output.set_model(self.avatar_model)
-        self.render_status.setText('3D描画：'+('Raftモデルを読み込み中' if self.avatar_model=='raft' else 'たぬつなモデル'))
+        self.render_status.setText('3D描画：'+(self.raft_view.message if self.avatar_model=='raft' else 'たぬつなモデル'))
         QSettings('TanutsunaStudio','Avatar').setValue('model',self.avatar_model)
         self._last_status=''
         self.modelChanged.emit(self.avatar_model)
