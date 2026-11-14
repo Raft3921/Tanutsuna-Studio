@@ -16,10 +16,12 @@ const indicator = document.querySelector('#status-indicator');
 const errorBox = document.querySelector('#error');
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.01, 1000);
+const initialWidth = Math.max(1, host.clientWidth, innerWidth);
+const initialHeight = Math.max(1, host.clientHeight, innerHeight);
+const camera = new THREE.PerspectiveCamera(32, initialWidth / initialHeight, 0.01, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, stencil: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
+renderer.setSize(initialWidth, initialHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.NoToneMapping;
 renderer.toneMappingExposure = 1;
@@ -170,6 +172,14 @@ function advanceMouthExpression(desired, now) {
 
 function textureBounds(texture, left, right, top, bottom) {
   const image = texture.image;
+  const fullTexture = () => ({
+    center: new THREE.Vector2(.5, .5),
+    size: new THREE.Vector2(1, 1)
+  });
+  // The avatar is displayed before its face art finishes loading. During that
+  // interval the 1x1 placeholder textures cannot contain the atlas regions
+  // requested below. Keep valid UV bounds so the first render frames can run.
+  if (!image || image.width < right || image.height < bottom) return fullTexture();
   const canvas = document.createElement('canvas');
   canvas.width = image.width; canvas.height = image.height;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -183,7 +193,9 @@ function textureBounds(texture, left, right, top, bottom) {
       minY = Math.min(minY, y + top); maxY = Math.max(maxY, y + top);
     }
   }
-  if (maxX < 0) return null;
+  // A transparent/missing expression still needs a valid source rectangle;
+  // otherwise the render loop tries to read `.center` from null.
+  if (maxX < 0) return fullTexture();
   return { center: new THREE.Vector2((minX + maxX + 1) / (2 * image.width), 1 - (minY + maxY + 1) / (2 * image.height)), size: new THREE.Vector2((maxX - minX + 1) / image.width, (maxY - minY + 1) / image.height) };
 }
 
@@ -652,6 +664,17 @@ async function initializeAvatar(object) {
 }
 
 window.setAvatarOrbit = degrees => { avatar.rotation.y = THREE.MathUtils.degToRad(Number(degrees) || 0); };
+window.resizeAvatarCanvas = (width, height) => {
+  const w = Math.max(1, Math.round(Number(width) || 0));
+  const h = Math.max(1, Math.round(Number(height) || 0));
+  const current = renderer.getSize(new THREE.Vector2());
+  if (current.x === w && current.y === h) return false;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  wholeOutline.resize();
+  return true;
+};
 window.setAvatarBackground = color => {
   for (const node of [document.documentElement, document.body, document.querySelector('.stage')]) node.style.background = color || 'transparent';
 };
@@ -776,9 +799,6 @@ function render() {
 render();
 
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  window.resizeAvatarCanvas(Math.max(innerWidth, host.clientWidth, 1), Math.max(innerHeight, host.clientHeight, 1));
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  wholeOutline.resize();
 });

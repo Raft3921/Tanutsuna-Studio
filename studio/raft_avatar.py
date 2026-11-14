@@ -7,7 +7,7 @@ import threading
 import time
 from urllib.parse import unquote, urlsplit
 
-from PySide6.QtCore import Qt, QUrl, Signal, QByteArray
+from PySide6.QtCore import Qt, QUrl, Signal, QByteArray, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QLabel, QStackedLayout
@@ -93,10 +93,30 @@ class RaftAvatarView(QWebEngineView):
         self._loaded = bool(ok)
         if ok:
             self.backendChanged.emit(False, 'ラフトのプレビューを準備中')
+            self._sync_canvas_size()
             self.update_pose(self._pose, self._now)
             self.set_background(self.background)
         else:
             self.backendChanged.emit(False, '3Dモデルを読み込めません')
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_canvas_size()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_canvas_size()
+
+    def _sync_canvas_size(self):
+        # A WebEngine page can finish loading while its stacked page still has
+        # zero size. Three.js then creates a zero-size drawing buffer and does
+        # not recover until it receives a resize after the widget is shown.
+        if self._loaded and self.width() > 0 and self.height() > 0:
+            width, height = self.width(), self.height()
+            # loadFinished may precede execution of the module script; delay
+            # the call so its resizeAvatarCanvas bridge has been installed.
+            QTimer.singleShot(120, lambda: self.page().runJavaScript(
+                f'window.resizeAvatarCanvas && window.resizeAvatarCanvas({width}, {height})'))
 
     def update_pose(self, pose, now=0):
         self._pose = pose.__dict__.copy() if hasattr(pose, '__dict__') else dict(pose)
@@ -134,7 +154,12 @@ class RaftAvatarView(QWebEngineView):
         if not self._loaded or self._capture_pending or now-self._last_capture_request<1/30:
             return self._frame
         self._capture_pending=True;self._capture_pending_since=now;self._last_capture_request=now
-        self.page().runJavaScript("(()=>{try{return window.captureAvatarFrame ? window.captureAvatarFrame() : 'error:3Dプレビューの初期化が完了していません'}catch(e){return 'error:プレビュー応答エラー: '+(e&&e.message||e)}})()",self._receive_frame)
+        width, height = max(1, self.width()), max(1, self.height())
+        script = (f'(()=>{{try{{const resized=window.resizeAvatarCanvas && window.resizeAvatarCanvas({width},{height});'
+            "if(resized)return 'loading:3D描画サイズを準備しています';"
+            "return window.captureAvatarFrame ? window.captureAvatarFrame() : 'error:3Dプレビューの初期化が完了していません';"
+            "}catch(e){return 'error:プレビュー応答エラー: '+(e&&e.message||e);}})()")
+        self.page().runJavaScript(script,self._receive_frame)
         return self._frame
 
     def _receive_frame(self,result):
@@ -163,7 +188,7 @@ class RaftAvatarView(QWebEngineView):
             return
         if isinstance(result,str) and result.startswith('data:image/png;base64,'):
             try:
-                image=QImage.fromData(b64decode(result.split(',',1)[1],validate=True),b'PNG')
+                image=QImage.fromData(QByteArray(b64decode(result.split(',',1)[1],validate=True)))
                 if not image.isNull():
                     self._texture_loading_since=0.
                     self._frame=image.convertToFormat(QImage.Format.Format_RGBA8888)
