@@ -8,7 +8,7 @@ import math
 import sys
 from PySide6.QtCore import Qt,QTimer,QSize,QRect,QUrl,QMicrophonePermission,QPointF
 from PySide6.QtGui import (QImage,QPainter,QColor,QPixmap,QDesktopServices,QLinearGradient,
- QRadialGradient,QPen,QPainterPath)
+ QRadialGradient,QPen,QPainterPath,QBrush)
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QComboBox,
  QLineEdit,QCheckBox,QFormLayout,QDoubleSpinBox,QSlider,QProgressBar,QFileDialog,QScrollArea,QApplication,QFrame,QTabWidget,QMessageBox)
 from PySide6.QtMultimedia import QWindowCapture,QVideoSink,QMediaCaptureSession,QMediaDevices,QMediaPlayer,QAudioOutput
@@ -47,6 +47,9 @@ class LivePanel(QWidget):
             QSlider::groove:horizontal { height:4px; background:#25434e; border-radius:2px; }
             QSlider::handle:horizontal { width:12px; margin:-5px 0; background:#65dfc2; border:1px solid #b4fff0; border-radius:6px; }
         ''')
+        dot_tile=QPixmap(18,18);dot_tile.fill(Qt.GlobalColor.transparent)
+        dot_painter=QPainter(dot_tile);dot_painter.setPen(Qt.PenStyle.NoPen);dot_painter.setBrush(QColor(238,255,190,72));dot_painter.drawEllipse(3,3,3,3);dot_painter.end()
+        self.stream_dot_brush=QBrush(dot_tile)
         outer=QVBoxLayout(self);outer.setContentsMargins(24,18,24,18)
         title=QLabel('ライブ配信');title.setObjectName('PageTitle');outer.addWidget(title)
         top=QHBoxLayout();self.windows=QComboBox();self.windows.setPlaceholderText('取得するゲームのウィンドウ');self.windows.setMinimumWidth(220);self.windows.currentIndexChanged.connect(self.choose_window);self.windows.currentIndexChanged.connect(self.update_buttons)
@@ -59,7 +62,9 @@ class LivePanel(QWidget):
         scroll=QScrollArea();scroll.setObjectName('LiveControls');scroll.setWidgetResizable(True);scroll.setMinimumWidth(285);scroll.setMaximumWidth(390);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);controls=QWidget();settings=QVBoxLayout(controls)
         self.control_tabs=QTabWidget();settings.addWidget(self.control_tabs)
         layout_tab=QWidget();layout_tab.setObjectName('LiveLayoutTab');layout_box=QVBoxLayout(layout_tab);self.control_tabs.addTab(layout_tab,'● レイアウト')
-        chat_tab=QWidget();chat_tab.setObjectName('LiveChatTab');chat_box=QVBoxLayout(chat_tab);self.control_tabs.addTab(chat_tab,'● チャット')
+        chat_tab=QWidget();chat_tab.setObjectName('LiveChatTab');chat_box=QVBoxLayout(chat_tab);self.control_tabs.addTab(chat_tab,'● チャット');self.chat_tab=chat_tab
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        self.chat_view=QWebEngineView(chat_tab);self.chat_view.setMinimumHeight(200)
         audio_tab=QWidget();audio_tab.setObjectName('LiveAudioTab');audio_box=QVBoxLayout(audio_tab);self.control_tabs.addTab(audio_tab,'● 音声')
         self.avatar=QCheckBox('ラフトV体を表示');self.avatar.setChecked(bool(self.saved_preferences.get('avatar',True)));layout_box.addWidget(self.avatar)
         self.avatar_model=QComboBox();self.avatar_model.addItem('ラフトV体','raft');self.avatar_model.addItem('たぬつなV体','tanuki')
@@ -143,7 +148,7 @@ class LivePanel(QWidget):
         self.chat_transforms={};chat_form=QFormLayout()
         for key,label,default,low,high in [('x','左右',83,0,100),('y','上下',44,0,100),('width','幅',24,10,50),('height','高さ',62,15,90),('opacity','不透明度',58,15,100)]:
             field=QDoubleSpinBox();field.setRange(low,high);field.setValue(float(self.saved_preferences.get('chat_'+key,default)));field.setSuffix(' %');self.chat_transforms[key]=field;chat_form.addRow(label,field)
-        chat_box.addLayout(chat_form);chat_box.addWidget(self.chat_status);chat_box.addStretch()
+        chat_box.addLayout(chat_form);chat_box.addWidget(self.chat_status);chat_box.addWidget(self.chat_view,1)
         self.preview=QLabel('配信開始前  ·  ゲーム画面と音声を確認できます');self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setMinimumSize(480,270);self.preview.setStyleSheet('background:#08151e;color:#c3dbe3;border:1px dotted #39717a;border-radius:12px')
         stage_layout.addWidget(self.preview,1);body.addWidget(stage,5)
@@ -155,8 +160,7 @@ class LivePanel(QWidget):
         self.live_avatar.setVisible(self.avatar.isChecked() and desk.vtuber.avatar_model=='raft')
         self.tanuki_avatar.setVisible(self.avatar.isChecked() and desk.vtuber.avatar_model=='tanuki')
         self.avatar.toggled.connect(self.update_avatar_visibility)
-        from PySide6.QtWebEngineCore import QWebEnginePage
-        self.chat_page=QWebEnginePage(self);self.chat_page.loadFinished.connect(self.chat_loaded)
+        self.chat_page=self.chat_view.page();self.chat_page.loadFinished.connect(self.chat_loaded)
         self.chat_messages=[];self.chat_page_ready=False
         self.chat_overlay_enabled.toggled.connect(self.chat_overlay_changed);self.chat_url.editingFinished.connect(self.load_chat_overlay)
         self.chat_capture_timer=QTimer(self);self.chat_capture_timer.setInterval(1000);self.chat_capture_timer.timeout.connect(self.refresh_chat_messages)
@@ -269,6 +273,7 @@ class LivePanel(QWidget):
 
     def chat_overlay_changed(self,enabled):
         if enabled:
+            self.control_tabs.setCurrentWidget(self.chat_tab)
             self.chat_status.setText('チャットページを読み込み中…');self.stage_status.setText('● CHAT LOADING');self.load_chat_overlay();self.chat_capture_timer.start()
         else:
             self.chat_capture_timer.stop();self.chat_status.setText('チャット OFF');self.stage_status.setText('● DOT LIVE')
@@ -310,19 +315,23 @@ class LivePanel(QWidget):
           };
           const walk=root=>{for(const node of root.querySelectorAll('*')){
             const tag=node.tagName.toLowerCase();
-            if(/^yt-live-chat-(text-message-renderer|paid-message-renderer|paid-sticker-renderer|membership-item-renderer)$/.test(tag)&&!seen.has(node)){
+            if(/^yt-live-chat-(text-message-renderer|paid-message-renderer|paid-sticker-renderer|membership-item-renderer|ticker-paid-message-item-renderer|ticker-sponsor-item-renderer)$/.test(tag)&&!seen.has(node)){
               seen.add(node);const author=text(node,'#author-name');
               const message=text(node,'#message')||text(node,'#purchase-amount')||text(node,'#header-subtext');
               if(author||message)rows.push({author:author.slice(0,80),message:message.slice(0,500)});
             }
             if(node.shadowRoot)walk(node.shadowRoot);
+            if(node.tagName==='IFRAME')try{if(node.contentDocument)walk(node.contentDocument)}catch(_e){}
           }};
           walk(document);return rows.slice(-10);
         })()'''
         self.chat_page.runJavaScript(script,self.chat_messages_updated)
 
     def chat_messages_updated(self,rows):
-        if not self.chat_overlay_enabled.isChecked() or not isinstance(rows,list):return
+        if not self.chat_overlay_enabled.isChecked():return
+        if not isinstance(rows,list):
+            self.chat_status.setText('チャットページ接続済み・メッセージを読み取り中…')
+            self.stage_status.setText('● CHAT READING');return
         messages=[]
         for row in rows[-10:]:
             if isinstance(row,dict):
@@ -342,27 +351,29 @@ class LivePanel(QWidget):
         x=max(0,min(width-box_w,cx-box_w//2));y=max(0,min(height-box_h,cy-box_h//2));rect=QRect(x,y,box_w,box_h)
         painter=QPainter(frame);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         alpha=round(opts['opacity'].value()*2.55)
-        painter.setPen(QPen(QColor(84,180,168,alpha),max(1,round(width/1200))))
-        painter.setBrush(QColor(7,19,29,min(230,alpha+45)));painter.drawRoundedRect(rect,18,18)
-        painter.save();path=QPainterPath();path.addRoundedRect(QRect(x+5,y+5,box_w-10,box_h-10),14,14);painter.setClipPath(path)
+        painter.setPen(QPen(QColor(27,139,104,max(190,alpha)),max(2,round(width/800)),Qt.PenStyle.DotLine))
+        painter.setBrush(QColor(241,248,220,min(246,alpha+100)));painter.drawRect(rect)
+        painter.save();path=QPainterPath();path.addRect(QRect(x+5,y+5,box_w-10,box_h-10));painter.setClipPath(path)
+        painter.fillRect(QRect(x+6,y+6,box_w-12,box_h-12),self.stream_dot_brush)
         base_font=painter.font();base_font.setPixelSize(max(16,round(width/105)))
         painter.setFont(base_font)
-        painter.setPen(QColor(189,246,232,alpha));painter.drawText(QRect(x+14,y+8,box_w-28,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'LIVE CHAT')
+        header=QRect(x+6,y+6,box_w-12,36);painter.fillRect(header,QColor(166,223,105,245))
+        painter.setPen(QColor('#153d36'));painter.drawText(QRect(x+14,y+8,box_w-28,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'● LIVE CHAT')
         messages=getattr(self,'chat_messages',[])[-10:]
         body=QRect(x+14,y+43,box_w-28,box_h-54)
         if not messages:
-            painter.setPen(QColor(194,218,225,alpha));painter.drawText(body,Qt.AlignmentFlag.AlignCenter,'チャットを待っています…')
+            painter.setPen(QColor('#51736a'));painter.drawText(body,Qt.AlignmentFlag.AlignCenter,'チャットを待っています…')
         else:
             row_h=max(48,body.height()//min(6,len(messages)));visible=messages[-max(1,body.height()//row_h):]
             for index,item in enumerate(visible):
                 row_y=body.y()+index*row_h
-                if index:painter.setPen(QPen(QColor(93,137,147,90),1));painter.drawLine(x+14,row_y,rect.right()-14,row_y)
+                if index:painter.setPen(QPen(QColor(40,139,104,110),1,Qt.PenStyle.DotLine));painter.drawLine(x+14,row_y,rect.right()-14,row_y)
                 cursor=row_y+5
                 if self.chat_names_enabled.isChecked() and item['author']:
                     author_font=painter.font();author_font.setPixelSize(max(13,round(width/130)));painter.setFont(author_font)
-                    painter.setPen(QColor(116,226,204,alpha));painter.drawText(QRect(x+14,cursor,box_w-28,20),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,item['author']);cursor+=20
+                    painter.setPen(QColor('#247d5f'));painter.drawText(QRect(x+14,cursor,box_w-28,20),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,item['author']);cursor+=20
                     painter.setFont(base_font)
-                painter.setPen(QColor(241,248,249,alpha));painter.drawText(QRect(x+14,cursor,box_w-28,max(20,row_h-(cursor-row_y)-4)),Qt.TextFlag.TextWordWrap,item['message'])
+                painter.setPen(QColor('#173b43'));painter.drawText(QRect(x+14,cursor,box_w-28,max(20,row_h-(cursor-row_y)-4)),Qt.TextFlag.TextWordWrap,item['message'])
         painter.restore()
         painter.end()
 
@@ -747,24 +758,24 @@ class LivePanel(QWidget):
                 backdrop=self.opening_frame.scaled(QSize(width,height),Qt.AspectRatioMode.KeepAspectRatioByExpanding,Qt.TransformationMode.SmoothTransformation)
                 source=QRect((backdrop.width()-width)//2,(backdrop.height()-height)//2,width,height)
                 painter.drawImage(frame.rect(),backdrop,source)
-            painter.fillRect(frame.rect(),QColor(7,13,16,205))
+            painter.fillRect(frame.rect(),QColor(7,13,16,145));painter.fillRect(frame.rect(),self.stream_dot_brush)
             scale=max(1,min(3,height//280));side=200*scale
             art=QRect(round(width*.13),round(height*.50-side/2),side,side)
-            painter.fillRect(art.adjusted(-10,-10,10,10),QColor('#101c1b'))
-            painter.setPen(QPen(QColor('#657a58'),2));painter.drawRect(art.adjusted(-10,-10,10,10))
+            painter.fillRect(art.adjusted(-10,-10,10,10),QColor('#f2f1d5'))
+            painter.setPen(QPen(QColor('#b4db73'),3,Qt.PenStyle.DotLine));painter.drawRect(art.adjusted(-10,-10,10,10))
             if not self.opening_frame.isNull():
                 painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,False)
                 painter.drawImage(art,self.opening_frame.scaled(side,side,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.FastTransformation))
             tx=art.right()+round(width*.045);tw=max(180,width-tx-round(width*.12))
-            painter.setPen(QColor('#a8c981'))
+            painter.setPen(QColor('#d5f393'))
             painter.drawText(QRect(tx,round(height*.29),tw,36),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'RAFT  /  LIVE STREAM')
-            painter.setPen(QColor('#f4f0dc'))
+            painter.setPen(QColor('#fffde8'))
             painter.drawText(QRect(tx,round(height*.37),tw,74),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'配信準備中')
-            painter.setPen(QPen(QColor('#9ebc68'),max(3,round(width/500))))
+            painter.setPen(QPen(QColor('#d1ee83'),max(4,round(width/450)),Qt.PenStyle.DotLine))
             painter.drawLine(tx,round(height*.49),tx+round(width*.09),round(height*.49))
-            painter.setPen(QColor('#e0dfce'))
+            painter.setPen(QColor('#fffde8'))
             painter.drawText(QRect(tx,round(height*.53),tw,64),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'ゲームの開始を待っています')
-            painter.setPen(QColor('#9fb0a1'))
+            painter.setPen(QColor('#d6e8bd'))
             hint='シーンを切り替えると配信が始まります'
             if self.chat_overlay_enabled.isChecked():
                 chat_width=round(width*self.chat_transforms['width'].value()/100)
@@ -773,21 +784,22 @@ class LivePanel(QWidget):
             painter.drawText(QRect(tx,round(height*.62),tw,52),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,hint)
             bar_y=round(height*.75);cell=max(12,round(width*.012));gap=max(5,round(width*.004));count=8;lit=int(now*2.5)%count
             for index in range(count):
-                color=QColor('#b7d47a') if index==lit else QColor('#425347')
-                painter.fillRect(QRect(tx+index*(cell+gap),bar_y,cell,8),color)
-            painter.setPen(QColor('#a6b5a1'))
-            painter.drawText(QRect(tx,bar_y+22,tw,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'MIC OFF     PC AUDIO OFF')
+                color=QColor('#d1ef84') if index==lit else QColor('#78956a')
+                painter.fillRect(QRect(tx+index*(cell+gap),bar_y,cell,10),color)
+            painter.setPen(QColor('#e6f0cf'))
+            painter.drawText(QRect(tx,bar_y+22,tw,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'ALL AUDIO OFF')
             painter.end();return frame
         if avatar is not None and not avatar.isNull():
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             side=round(height*.56);painter.drawImage(QRect(round(width*.70-side/2),round(height*.48-side/2),side,side),avatar)
         if name=='break':
             age=max(0.,now-getattr(self,'scene_started',now));panel=QRect(round(width*.08),round(height*.29),round(width*.50),round(height*.40))
-            painter.setPen(QPen(QColor('#5be0c2'),2));painter.setBrush(QColor(5,19,29,210));painter.drawRoundedRect(panel,22,22)
-            painter.setPen(QColor('#70e8ce'));painter.drawText(QRect(panel.x()+30,panel.y()+25,panel.width()-60,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'PAUSE  /  BRB')
-            painter.setPen(QColor('#f2fbff'));painter.drawText(QRect(panel.x()+30,panel.y()+75,panel.width()-60,60),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'離席中')
-            painter.setPen(QColor('#c5d9e2'));painter.drawText(QRect(panel.x()+30,panel.y()+145,panel.width()-60,38),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'まもなく配信に戻ります')
-            painter.setPen(QColor('#90aeb9'));painter.drawText(QRect(panel.x()+30,panel.y()+205,panel.width()-60,28),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,f'MIC MUTED  •  {int(age)//60:02}:{int(age)%60:02}')
+            painter.setPen(QPen(QColor('#38bd91'),3,Qt.PenStyle.DotLine));painter.setBrush(QColor(245,249,221,245));painter.drawRect(panel)
+            painter.fillRect(panel,self.stream_dot_brush)
+            painter.setPen(QColor('#257e5e'));painter.drawText(QRect(panel.x()+30,panel.y()+25,panel.width()-60,30),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'PAUSE  /  BRB')
+            painter.setPen(QColor('#163b43'));painter.drawText(QRect(panel.x()+30,panel.y()+75,panel.width()-60,60),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'離席中')
+            painter.setPen(QColor('#315b53'));painter.drawText(QRect(panel.x()+30,panel.y()+145,panel.width()-60,38),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'まもなく配信に戻ります')
+            painter.setPen(QColor('#247d5f'));painter.drawText(QRect(panel.x()+30,panel.y()+205,panel.width()-60,28),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,f'MIC MUTED  •  {int(age)//60:02}:{int(age)%60:02}')
         painter.setPen(QColor(205,245,239,135));painter.drawText(QRect(30,height-58,width-60,28),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'TANUTSUNA STUDIO     /     LIVE SESSION')
         painter.end();return frame
 
@@ -803,9 +815,10 @@ class LivePanel(QWidget):
         for point in points[1:]:path.lineTo(point)
         path.closeSubpath();frame=source.copy();painter=QPainter(frame);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setClipPath(path);painter.drawImage(0,0,target);painter.setClipping(False)
-        glow_x=round(edge+math.sin(now*12)*4);painter.setPen(QPen(QColor('#63f2d0'),max(3,round(width/400))));painter.drawLine(glow_x,0,glow_x,height)
-        painter.setPen(QColor('#d8fff8'));painter.setBrush(QColor(5,20,30,210));painter.drawRoundedRect(QRect(round(width*.04),round(height*.055),round(width*.25),46),12,12)
-        painter.drawText(QRect(round(width*.055),round(height*.055),round(width*.22),46),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'SCENE SHIFT   /   '+f'{int(progress*100):02}%')
+        glow_x=round(edge+math.sin(now*12)*4);painter.setPen(QPen(QColor('#dbf887'),max(4,round(width/350)),Qt.PenStyle.DotLine));painter.drawLine(glow_x,0,glow_x,height)
+        badge=QRect(round(width*.04),round(height*.055),round(width*.25),46)
+        painter.setPen(QPen(QColor('#2da97b'),2,Qt.PenStyle.DotLine));painter.setBrush(QColor(244,250,218,245));painter.drawRect(badge)
+        painter.setPen(QColor('#183d3c'));painter.drawText(badge.adjusted(10,0,-8,0),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'SCENE SHIFT   /   '+f'{int(progress*100):02}%')
         painter.end();return frame
 
     def update_mix(self,*_):
