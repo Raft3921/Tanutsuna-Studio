@@ -67,7 +67,7 @@ def build():
         shutil.copy2(source, app / 'cutraft' / source.name)
     args = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--windowed', '--onedir',
         '--name', 'Tanutsuna Studio', '--osx-bundle-identifier', 'com.tanutsuna.studio',
-        '--paths', str(app), '--paths',str(ROOT/'build/live-deps'),'--collect-all','av','--collect-all','numpy','--collect-all','imageio_ffmpeg',
+        '--paths', str(app), '--paths',str(ROOT/'build/live-deps'),'--collect-all','av','--collect-all','numpy','--collect-all','imageio_ffmpeg','--collect-all','certifi',
         '--icon', str(app / 'cutraft/resources/icons/cutraft.icns'),
         '--add-data', str(app / 'cutraft/resources') + ':cutraft/resources',
         '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build/mac'),

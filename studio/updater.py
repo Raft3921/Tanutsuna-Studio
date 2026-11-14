@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import ssl
 import subprocess
 import sys
 import stat
@@ -25,6 +26,16 @@ from .version import GITHUB_REPOSITORY, STUDIO_VERSION
 
 API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 MAX_RELEASE_BYTES = 1024 * 1024 * 1024
+
+
+def _urlopen(request, timeout):
+    """Use a packaged CA bundle so frozen builds can verify public HTTPS hosts."""
+    try:
+        import certifi
+        context = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        context = ssl.create_default_context()
+    return urllib.request.urlopen(request, timeout=timeout, context=context)
 
 
 def _version(value: str) -> tuple[int, ...]:
@@ -88,7 +99,7 @@ def request_json(url: str) -> dict:
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "Tanutsuna-Studio-Updater",
     })
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with _urlopen(request, timeout=15) as response:
         return json.loads(response.read(2 * 1024 * 1024))
 
 
@@ -140,7 +151,7 @@ def _download_ranges(url: str, size: int, destination: Path, progress=None) -> b
                "User-Agent": "Tanutsuna-Studio-Updater"}
     try:
         probe = urllib.request.Request(url, headers={**headers, "Range": "bytes=0-0"})
-        with urllib.request.urlopen(probe, timeout=30) as response:
+        with _urlopen(probe, timeout=30) as response:
             if response.status != 206 or response.headers.get("Content-Range") != f"bytes 0-0/{size}":
                 return False
             response.read(1)
@@ -169,7 +180,7 @@ def _download_ranges(url: str, size: int, destination: Path, progress=None) -> b
                     if cancelled.is_set():
                         return
                     try:
-                        with urllib.request.urlopen(request, timeout=120) as response:
+                        with _urlopen(request, timeout=120) as response:
                             if response.status != 206 or response.headers.get("Content-Range") != f"bytes {start}-{end}/{size}":
                                 raise RuntimeError("更新サーバーが要求した範囲を返しませんでした。")
                             data = response.read(expected + 1)
@@ -265,7 +276,7 @@ def _download(release: dict, destination: Path, progress=None) -> None:
             "Accept": "application/octet-stream", "User-Agent": "Tanutsuna-Studio-Updater"})
         received = 0
         last = -1
-        with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
+        with _urlopen(request, timeout=60) as response, destination.open("wb") as output:
             while chunk := response.read(1024 * 1024):
                 received += len(chunk)
                 if received > size or received > MAX_RELEASE_BYTES:

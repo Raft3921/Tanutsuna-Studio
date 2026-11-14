@@ -37,6 +37,13 @@ def pack_windows(base):
     shutil.copytree(ROOT / 'studio', current / 'app/studio', dirs_exist_ok=True, ignore=copy_ignore)
     shutil.copy2(ROOT / 'README.md', current / 'README.md')
     shutil.copy2(ROOT / f'docs/release-{VERSION}.md', current / 'ご利用ガイド.md')
+    certifi_dir = BUILD / 'certifi-wheel'
+    certifi_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run([sys.executable, '-m', 'pip', 'download', '--only-binary=:all:', '--no-deps',
+                    '--dest', str(certifi_dir), 'certifi==2026.7.22'], check=True)
+    certifi_wheel = next(certifi_dir.glob('certifi-*.whl'))
+    with zipfile.ZipFile(certifi_wheel) as package:
+        package.extractall(current / 'runtime/Lib/site-packages')
     hashes = {str(file.relative_to(current / 'app')).replace('\\', '/'): hashlib.sha256(file.read_bytes()).hexdigest()
               for file in (current / 'app').rglob('*') if file.is_file()}
     manifest = {'studioVersion': VERSION, 'editorVersion': '0.5.1', 'editorSource': 'Cut Raft',
