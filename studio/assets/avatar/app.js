@@ -336,8 +336,8 @@ function createFaceMaterial(layers) {
     uEyeDisplayLeft: { value: new THREE.Vector2() }, uEyeDisplayRight: { value: new THREE.Vector2() },
     uEyeScaleLeft: { value: new THREE.Vector2(1, 1) }, uEyeScaleRight: { value: new THREE.Vector2(1, 1) },
     uMouthState: { value: 0 },
-    uMouthSourceCenter: { value: new THREE.Vector2() }, uMouthDisplayCenter: { value: new THREE.Vector2() },
-    uMouthMorphScale: { value: new THREE.Vector2(1, 1) },
+    uMouthStateTo: { value: 0 },
+    uMouthProgress: { value: 0 },
     uMouthCenterV: { value: 1 - 1545.5 / 2048 },
     uMouthUvScale: { value: 2.7 }
   };
@@ -367,7 +367,8 @@ function createFaceMaterial(layers) {
       uniform vec2 uEyeDisplayLeft; uniform vec2 uEyeDisplayRight;
       uniform vec2 uEyeScaleLeft; uniform vec2 uEyeScaleRight;
       uniform float uMouthState;
-      uniform vec2 uMouthSourceCenter; uniform vec2 uMouthDisplayCenter; uniform vec2 uMouthMorphScale;
+      uniform float uMouthStateTo;
+      uniform float uMouthProgress;
       uniform float uMouthCenterV;
       uniform float uMouthUvScale;
       void main() {
@@ -397,16 +398,25 @@ function createFaceMaterial(layers) {
         vec4 brows = texture2D(uEyebrowsMap, browUv);
         color = mix(color, brows.rgb, brows.a);
         vec2 mouthUv = vec2(vFaceUv.x, uMouthCenterV + (vFaceUv.y - uMouthCenterV) * uMouthUvScale + uMouthUvOffsetV);
-        mouthUv = uMouthSourceCenter + (mouthUv - uMouthDisplayCenter) * uMouthMorphScale;
-        float state = floor(clamp(uMouthState, 0.0, 5.0) + 0.5);
-        vec4 mouth = texture2D(uMouthMaps[0], mouthUv);
-        if (state > 0.5) mouth = texture2D(uMouthMaps[1], mouthUv);
-        if (state > 1.5) mouth = texture2D(uMouthMaps[2], mouthUv);
-        if (state > 2.5) mouth = texture2D(uMouthMaps[3], mouthUv);
-        if (state > 3.5) mouth = texture2D(uMouthMaps[4], mouthUv);
-        if (state > 4.5) mouth = texture2D(uMouthMaps[5], mouthUv);
-        float mouthLight = dot(mouth.rgb, vec3(0.2126, 0.7152, 0.0722));
-        mouth.rgb = mouthLight < 0.035 ? uMouthInk : (mouthLight < 0.22 ? uMouthInterior : uMouthTongue);
+        float stateFrom = floor(clamp(uMouthState, 0.0, 5.0) + 0.5);
+        float stateTo = floor(clamp(uMouthStateTo, 0.0, 5.0) + 0.5);
+        vec4 mouthFrom = texture2D(uMouthMaps[0], mouthUv);
+        if (stateFrom > 0.5) mouthFrom = texture2D(uMouthMaps[1], mouthUv);
+        if (stateFrom > 1.5) mouthFrom = texture2D(uMouthMaps[2], mouthUv);
+        if (stateFrom > 2.5) mouthFrom = texture2D(uMouthMaps[3], mouthUv);
+        if (stateFrom > 3.5) mouthFrom = texture2D(uMouthMaps[4], mouthUv);
+        if (stateFrom > 4.5) mouthFrom = texture2D(uMouthMaps[5], mouthUv);
+        vec4 mouthTo = texture2D(uMouthMaps[0], mouthUv);
+        if (stateTo > 0.5) mouthTo = texture2D(uMouthMaps[1], mouthUv);
+        if (stateTo > 1.5) mouthTo = texture2D(uMouthMaps[2], mouthUv);
+        if (stateTo > 2.5) mouthTo = texture2D(uMouthMaps[3], mouthUv);
+        if (stateTo > 3.5) mouthTo = texture2D(uMouthMaps[4], mouthUv);
+        if (stateTo > 4.5) mouthTo = texture2D(uMouthMaps[5], mouthUv);
+        float mouthFromLight = dot(mouthFrom.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float mouthToLight = dot(mouthTo.rgb, vec3(0.2126, 0.7152, 0.0722));
+        mouthFrom.rgb = mouthFromLight < 0.035 ? uMouthInk : (mouthFromLight < 0.22 ? uMouthInterior : uMouthTongue);
+        mouthTo.rgb = mouthToLight < 0.035 ? uMouthInk : (mouthToLight < 0.22 ? uMouthInterior : uMouthTongue);
+        vec4 mouth = mix(mouthFrom, mouthTo, clamp(uMouthProgress, 0.0, 1.0));
         color = mix(color, mouth.rgb, mouth.a);
         vec3 shadedColor = shadeSkin(color);
         vec3 brightCatchlight = mix(iris.rgb, vec3(1.0), 0.42);
@@ -426,9 +436,7 @@ function createFaceMaterial(layers) {
   for (let i = 0; i < eyeBounds.length; i++) {
     for (let side = 0; side < 2; side++) eyeBounds[i][side] ||= eyeBounds[0][side];
   }
-  const mouthBounds = [layers.mouthClosed, layers.mouthA, layers.mouthI, layers.mouthU, layers.mouthE, layers.mouthO].map(texture => textureBounds(texture, 750, 1300, 1300, 1800));
-  for (let i = 0; i < mouthBounds.length; i++) mouthBounds[i] ||= mouthBounds[0];
-  faceUniforms.push({ uniforms, eyeBounds, mouthBounds, hasClosedEyes: !layers.eyesClosed.userData.missingBlink });
+  faceUniforms.push({ uniforms, eyeBounds, hasClosedEyes: !layers.eyesClosed.userData.missingBlink });
   return material;
 }
 
@@ -688,8 +696,6 @@ window.updateAvatarPose = pose => {
   faceMotion.blink = Math.max(Number(pose.eyeBlinkLeft) || 0, Number(pose.eyeBlinkRight) || 0);
   faceMotion.pupilX = THREE.MathUtils.clamp(Number(pose.gazeX) || 0, -.35, .35) * .055;
   faceMotion.pupilY = -THREE.MathUtils.clamp(Number(pose.gazeY) || 0, -.35, .35) * .045;
-  window.avatarMouthWidth = Math.max(.55, Math.min(1.9, Number(pose.mouthWidth) || 1));
-  window.avatarMouthHeight = Math.max(.15, Math.min(1.3, Number(pose.mouthHeight) || 1));
 };
 window.updateAvatarPose({});
 window.captureAvatarFrame = () => {
@@ -733,7 +739,7 @@ function render() {
   }
   const eyeFrame = advanceExpression(eyeAnimation, desiredEye, now, desiredEye !== 2);
   const mouthFrame = advanceMouthExpression(faceMotion.mouthState, now);
-  for (const { uniforms, eyeBounds, mouthBounds, hasClosedEyes } of faceUniforms) {
+  for (const { uniforms, eyeBounds, hasClosedEyes } of faceUniforms) {
     let eyeFrom = !hasClosedEyes && eyeFrame.from === 2 ? 1 : eyeFrame.from;
     const eyeTo = !hasClosedEyes && eyeFrame.to === 2 ? 1 : eyeFrame.to;
     const openingFromClosed = hasClosedEyes && eyeFrame.from === 2 && eyeFrame.to === 1;
@@ -759,9 +765,8 @@ function render() {
     }
     uniforms.uIrisPulse.value = eyeFrame.from === 1 && eyeFrame.to === 0 ? Math.sin(eyeFrame.progress * Math.PI) : 0;
     uniforms.uMouthState.value = mouthFrame.from;
-    morphBounds(mouthBounds[mouthFrame.from], mouthBounds[mouthFrame.to], mouthFrame.progress, uniforms.uMouthSourceCenter.value, uniforms.uMouthDisplayCenter.value, uniforms.uMouthMorphScale.value);
-    uniforms.uMouthMorphScale.value.x *= window.avatarMouthWidth || 1;
-    uniforms.uMouthMorphScale.value.y *= window.avatarMouthHeight || 1;
+    uniforms.uMouthStateTo.value = mouthFrame.to;
+    uniforms.uMouthProgress.value = mouthFrame.progress;
     uniforms.uPupilOffset.value.x = THREE.MathUtils.damp(uniforms.uPupilOffset.value.x, faceMotion.pupilX, 10, frameDt);
     uniforms.uPupilOffset.value.y = THREE.MathUtils.damp(uniforms.uPupilOffset.value.y, faceMotion.pupilY, 10, frameDt);
   }
