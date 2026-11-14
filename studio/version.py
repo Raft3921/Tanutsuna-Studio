@@ -1,4 +1,4 @@
 """Single source of truth for the application and updater version."""
 
-STUDIO_VERSION = "1.5.4"
+STUDIO_VERSION = "1.5.5"
 GITHUB_REPOSITORY = "Raft3921/Tanutsuna-Studio"

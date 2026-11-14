@@ -175,6 +175,17 @@ class LivePanel(QWidget):
         enabled=self.avatar.isChecked();model=self.desk.vtuber.avatar_model
         self.live_avatar.setVisible(enabled and model=='raft')
         self.tanuki_avatar.setVisible(enabled and model=='tanuki')
+        if not enabled and not self.previewing:
+            self.preview.clear();self.preview.setText('配信開始を押すと、必要な入力を自動で準備します。')
+
+    def update_idle_avatar_preview(self,avatar,transform):
+        if avatar is None or avatar.isNull():return
+        width=max(1,self.preview.width());height=max(1,self.preview.height())
+        frame=QImage(width,height,QImage.Format.Format_RGB32);frame.fill(QColor('#13232c'))
+        side=round(width*transform['size'])
+        rect=QRect(round(width*transform['x']-side/2),round(height*transform['y']-side/2),side,side)
+        painter=QPainter(frame);painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform);painter.drawImage(rect,avatar);painter.end()
+        self.preview.setPixmap(QPixmap.fromImage(frame))
 
     def save_preferences(self):
         live=self.desk.workspace.data.setdefault('live',{})
@@ -435,12 +446,14 @@ class LivePanel(QWidget):
         panel=self.desk.vtuber
         transform={k:v.value()/100 for k,v in self.transforms.items()}
         model=panel.avatar_model
+        avatar_image=None
         if self.avatar.isChecked() and model=='raft':
             self.live_avatar.setVisible(True);self.tanuki_avatar.hide()
             self.live_avatar.orbit=panel.orbit.value()
             self.live_avatar.update_pose(panel.pose,time.monotonic())
             w=max(1,self.preview.width());h=max(1,self.preview.height());side=max(64,round(w*transform['size']))
             self.live_avatar.setGeometry(round(w*transform['x']-side/2),round(h*transform['y']-side/2),side,side)
+            avatar_image=self.live_avatar.capture_frame()
         elif self.avatar.isChecked() and model=='tanuki':
             self.live_avatar.hide();self.tanuki_avatar.setVisible(True)
             w=max(1,self.preview.width());h=max(1,self.preview.height());side=max(64,round(w*transform['size']))
@@ -451,11 +464,14 @@ class LivePanel(QWidget):
                     self.renderer=OfflineAvatar(panel.tanuki_view.model,size=384 if self.quality.currentData()[0]==1280 else 512,samples=1)
                 if self.renderer and (self.cached_avatar is None or time.monotonic()-self.last_avatar_render>=1/30):
                     self.cached_avatar=self.renderer.frame(panel.pose,time.monotonic(),panel.orbit.value());self.last_avatar_render=time.monotonic()
+                avatar_image=self.cached_avatar
                 if self.cached_avatar:self.tanuki_avatar.setPixmap(QPixmap.fromImage(self.cached_avatar).scaled(side,side,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
             except Exception as exc:
                 self._renderer_error=str(exc);self.status.setText('たぬつなV体を描画できません: '+self._renderer_error)
                 if self.previewing:self.input_failed('たぬつなV体を描画できません。V体の設定でラフトV体に切り替えて再試行してください。');return
-        if not self.previewing:return
+        if not self.previewing:
+            self.update_idle_avatar_preview(avatar_image,transform)
+            return
         camera_ready=not self.avatar.isChecked() or bool(self.desk.vtuber.server.state.camera_label)
         if self.preparing:
             if self.game is not None and camera_ready and self.audio_ready:
@@ -474,8 +490,7 @@ class LivePanel(QWidget):
         if self.avatar.isChecked():
             pose=copy.deepcopy(panel.pose.__dict__);transform['orbit']=panel.orbit.value()
             try:
-                if model=='raft':avatar=self.live_avatar.capture_frame()
-                else:avatar=self.cached_avatar
+                avatar=avatar_image
                 if avatar is not None and avatar.isNull():avatar=None
                 if avatar is not None:
                     painter=QPainter(game_program);painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
