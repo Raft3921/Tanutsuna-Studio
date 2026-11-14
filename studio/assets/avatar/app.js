@@ -131,7 +131,7 @@ const eyeAnimation = { state: 0, from: 0, to: 0, started: 0, duration: 160 };
 let smoothedBlink = 0;
 let halfEyeSince = 0;
 const mouthAnimation = { state: 0, from: 0, to: 0, started: 0, duration: 75 };
-let mouthClosedSince = 0;
+let mouthQuietSince = 0;
 
 function classifyMouth(jaw, lipGap, pucker, stretch, smile, wasOpen) {
   const opening = Math.max(jaw * 2.5, lipGap * 1.8);
@@ -156,18 +156,23 @@ function advanceExpression(animation, desired, now, stepwise = false) {
 }
 
 function advanceMouthExpression(desired, now) {
-  const previousState = mouthAnimation.state;
-  const current = advanceExpression(mouthAnimation, mouthAnimation.to, now);
-  if (previousState !== 0 && mouthAnimation.state === 0) mouthClosedSince = now;
-  if (mouthAnimation.from !== mouthAnimation.to) return current;
-
-  let next = mouthAnimation.state;
-  if (mouthAnimation.state === 0) {
-    if (desired !== 0 && now - mouthClosedSince >= 100) next = desired;
-  } else if (desired !== mouthAnimation.state) {
-    next = 0;
+  // Keep the last open shape through brief gaps in camera tracking, and blend
+  // directly between vowel shapes. Only close after a sustained quiet period.
+  if (desired !== 0) {
+    mouthQuietSince = 0;
+    if (mouthAnimation.to === 0 && mouthAnimation.from !== mouthAnimation.to) {
+      mouthAnimation.from = mouthAnimation.state;
+      mouthAnimation.to = desired;
+      mouthAnimation.started = now;
+    }
+    return advanceExpression(mouthAnimation, desired, now);
   }
-  return advanceExpression(mouthAnimation, next, now);
+  if (!mouthQuietSince) mouthQuietSince = now;
+  const held = mouthAnimation.from !== mouthAnimation.to ? mouthAnimation.to : mouthAnimation.state;
+  if (held !== 0 && now - mouthQuietSince < 120) {
+    return advanceExpression(mouthAnimation, held, now);
+  }
+  return advanceExpression(mouthAnimation, 0, now);
 }
 
 function textureBounds(texture, left, right, top, bottom) {

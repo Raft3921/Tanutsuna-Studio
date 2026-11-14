@@ -155,14 +155,22 @@ class PacketWriter:
 class Publisher:
     def __init__(self,url,width,height,notify,templates):
         self.url=url;self.width=width;self.height=height;self.notify=notify;self.templates=templates
-        self.queue=queue.Queue(maxsize=90);self.stop=threading.Event();self.thread=threading.Thread(target=self.run,daemon=True)
+        self.queue=queue.Queue(maxsize=90);self.stop=threading.Event();self.overrun=threading.Event();self.thread=threading.Thread(target=self.run,daemon=True)
     def start(self):self.thread.start()
     def offer(self,item):
         if self.stop.is_set():return
         try:self.queue.put_nowait(item)
         except queue.Full:
+            # Video and AAC packets share one timestamped mux queue. Dropping
+            # arbitrary packets corrupts GOP/audio continuity, so discard the
+            # backlog together and have the publisher establish a fresh RTMP
+            # connection at the next keyframe.
+            self.overrun.set()
             try:self.queue.get_nowait()
             except queue.Empty:pass
+            while True:
+                try:self.queue.get_nowait()
+                except queue.Empty:break
             try:self.queue.put_nowait(item)
             except queue.Full:pass
     def safe_error(self,exc):
@@ -174,6 +182,20 @@ class Publisher:
         writer=None;attempt=0
         try:
             while not self.stop.is_set():
+                if self.overrun.is_set():
+                    self.overrun.clear()
+                    while True:
+                        try:self.queue.get_nowait()
+                        except queue.Empty:break
+                    if writer:
+                        try:writer.close()
+                        except Exception:pass
+                        writer=None
+                    attempt+=1
+                    self.notify('reconnecting','送出キューが混み合ったため、映像と音声の同期を取り直しています。')
+                    if self.stop.wait(min(3,attempt)):
+                        break
+                    continue
                 if writer is None:
                     self.notify('connecting' if not attempt else 'reconnecting')
                     try:writer=PacketWriter(self.url,self.width,self.height,self.templates)
@@ -184,6 +206,8 @@ class Publisher:
                         continue
                 try:item=self.queue.get(timeout=.15)
                 except queue.Empty:continue
+                if self.overrun.is_set():
+                    continue
                 try:
                     was=writer.started;sent=writer.write(item)
                     if sent and not was:self.notify('live');attempt=0
