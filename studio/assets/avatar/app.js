@@ -447,7 +447,12 @@ async function loadFaceTextures() {
     } catch (error) {
       warnings.push(`${file}: ${error && error.message || error}`);
       const fallback = key === 'base' ? [245, 226, 205, 255] : [0, 0, 0, 0];
-      texture = new THREE.DataTexture(new Uint8Array(fallback), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d');
+      context.fillStyle = `rgba(${fallback[0]},${fallback[1]},${fallback[2]},${fallback[3] / 255})`;
+      context.fillRect(0, 0, 1, 1);
+      texture = new THREE.CanvasTexture(canvas);
       if (key === 'eyesClosed') texture.userData.missingBlink = true;
       console.warn('顔テクスチャの代替表示を使います:', file, error);
     } finally {
