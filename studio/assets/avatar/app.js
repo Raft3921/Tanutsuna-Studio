@@ -430,13 +430,32 @@ function imageAssetUrl(file) {
 async function loadFaceTextures() {
   const loader = new THREE.TextureLoader();
   const warnings = [];
+  let forceFallbackResolver;
+  const forceFallbackSignal = new Promise(resolve => { forceFallbackResolver = resolve; });
   const files = {
     base: 'face-base.png', eyesOpen: 'face-eyes-open.png', pupils: 'face-pupils.png',
     eyeMask: 'face-eye-mask.png', eyebrows: 'face-eyebrows.png', eyesHalf: 'face-eyes-half.png', eyesClosed: 'face-eyes-closed.png',
     mouthClosed: 'face-mouth-closed.png', mouthA: 'face-mouth-a.png', mouthI: 'face-mouth-i.png',
     mouthU: 'face-mouth-u.png', mouthE: 'face-mouth-e.png', mouthO: 'face-mouth-o.png'
   };
-  const entries = await Promise.all(Object.entries(files).map(async ([key, file]) => {
+  const makeFallback = (key, file, error) => {
+    warnings.push(`${file}: ${error && error.message || error}`);
+    const fallback = key === 'base' ? [245, 226, 205, 255] : [0, 0, 0, 0];
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d');
+    context.fillStyle = `rgba(${fallback[0]},${fallback[1]},${fallback[2]},${fallback[3] / 255})`;
+    context.fillRect(0, 0, 1, 1);
+    const texture = new THREE.CanvasTexture(canvas);
+    if (key === 'eyesClosed') texture.userData.missingBlink = true;
+    return texture;
+  };
+  window.forceAvatarTextureFallback = () => {
+    window.avatarStatus = '顔画像を代替してモデルを表示しています';
+    forceFallbackResolver?.(true);
+    return true;
+  };
+  const textureLoads = Promise.all(Object.entries(files).map(async ([key, file]) => {
     let texture;
     let timeout;
     try {
@@ -445,15 +464,7 @@ async function loadFaceTextures() {
         new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('画像読み込みがタイムアウトしました')), 8000); })
       ]);
     } catch (error) {
-      warnings.push(`${file}: ${error && error.message || error}`);
-      const fallback = key === 'base' ? [245, 226, 205, 255] : [0, 0, 0, 0];
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 1;
-      const context = canvas.getContext('2d');
-      context.fillStyle = `rgba(${fallback[0]},${fallback[1]},${fallback[2]},${fallback[3] / 255})`;
-      context.fillRect(0, 0, 1, 1);
-      texture = new THREE.CanvasTexture(canvas);
-      if (key === 'eyesClosed') texture.userData.missingBlink = true;
+      texture = makeFallback(key, file, error);
       console.warn('顔テクスチャの代替表示を使います:', file, error);
     } finally {
       clearTimeout(timeout);
@@ -467,6 +478,13 @@ async function loadFaceTextures() {
     texture.needsUpdate = true;
     return [key, texture];
   }));
+  const result = await Promise.race([
+    textureLoads.then(entries => ({ entries })),
+    forceFallbackSignal.then(() => ({ forced: true }))
+  ]);
+  const entries = result.forced
+    ? Object.entries(files).map(([key, file]) => [key, makeFallback(key, file, new Error('画像読み込みを省略しました'))])
+    : result.entries;
   window.avatarTextureWarnings = warnings;
   return Object.fromEntries(entries);
 }

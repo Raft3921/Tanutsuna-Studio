@@ -80,6 +80,8 @@ class RaftAvatarView(QWebEngineView):
         self._capture_pending = False
         self._capture_pending_since = 0.
         self._last_capture_request = 0.
+        self._texture_loading_since = 0.
+        self._texture_fallback_requested = False
         self._model_status = ''
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet('background: transparent; border: none;')
@@ -118,6 +120,12 @@ class RaftAvatarView(QWebEngineView):
     def capture_frame(self):
         """Capture the original Three.js canvas, retaining its transparent pixels."""
         now=time.monotonic()
+        if (self._texture_loading_since and not self._texture_fallback_requested
+                and now-self._texture_loading_since>=8.5):
+            self._texture_fallback_requested=True
+            status='顔画像の読み込みを省略してモデルを準備しています'
+            self._model_status=status;self.backendChanged.emit(False,status)
+            self.page().runJavaScript('window.forceAvatarTextureFallback && window.forceAvatarTextureFallback()')
         if self._capture_pending and now-self._capture_pending_since>8:
             self._capture_pending=False
             status='3D描画の応答がありません（GPU/WebGLを確認してください）'
@@ -134,8 +142,13 @@ class RaftAvatarView(QWebEngineView):
         self._capture_pending_since=0.
         if isinstance(result,str) and result.startswith('loading:'):
             status=result[8:]
+            if 'テクスチャ' in status and not self._texture_loading_since:
+                self._texture_loading_since=time.monotonic()
+            elif 'テクスチャ' not in status and not self._texture_fallback_requested:
+                self._texture_loading_since=0.
             if status!=self._model_status:
-                self._model_status=status;self.backendChanged.emit(False,status)
+                if not self._texture_fallback_requested:
+                    self._model_status=status;self.backendChanged.emit(False,status)
             return
         if result is None:
             status='3Dプレビューから描画結果が返りません'
@@ -143,6 +156,7 @@ class RaftAvatarView(QWebEngineView):
                 self._model_status=status;self.backendChanged.emit(False,status)
             return
         if isinstance(result,str) and result.startswith('error:'):
+            self._texture_loading_since=0.
             status='モデルを読み込めません: '+result[6:]
             if status!=self._model_status:
                 self._model_status=status;self.backendChanged.emit(False,status)
@@ -151,6 +165,7 @@ class RaftAvatarView(QWebEngineView):
             try:
                 image=QImage.fromData(b64decode(result.split(',',1)[1],validate=True),b'PNG')
                 if not image.isNull():
+                    self._texture_loading_since=0.
                     self._frame=image.convertToFormat(QImage.Format.Format_RGBA8888)
                     if self._model_status!='ready':
                         self._model_status='ready';self.backendChanged.emit(False,'ラフトモデル表示中')
