@@ -151,7 +151,7 @@ class RaftAvatarView(QWebEngineView):
             status='3D描画の応答がありません（GPU/WebGLを確認してください）'
             if status!=self._model_status:
                 self._model_status=status;self.backendChanged.emit(False,status)
-        if not self._loaded or self._capture_pending or now-self._last_capture_request<1/30:
+        if not self._loaded or self._capture_pending or now-self._last_capture_request<1/60:
             return self._frame
         self._capture_pending=True;self._capture_pending_since=now;self._last_capture_request=now
         width, height = max(1, self.width()), max(1, self.height())

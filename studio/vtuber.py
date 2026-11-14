@@ -143,7 +143,7 @@ class VtuberPanel(QWidget):
         self.tanuki_view.backendChanged.connect(self.renderer_changed)
         self.model_choice.currentIndexChanged.connect(self.change_model)
         self.change_model()
-        self.timer=QTimer(self);self.timer.setInterval(120 if self.tanuki_view.software else 33);self.timer.timeout.connect(self.tick);self.timer.start()
+        self.timer=QTimer(self);self.timer.setTimerType(Qt.TimerType.PreciseTimer);self.timer.setInterval(120 if self.tanuki_view.software else 16);self.timer.timeout.connect(self.tick);self.timer.start()
 
     def load_mouth_shape(self,*_):
         width,height=self.mouth_shapes[VOWELS[self.vowel.currentIndex()]]
@@ -161,7 +161,7 @@ class VtuberPanel(QWidget):
     def renderer_changed(self,software,message):
         self.compatibility.blockSignals(True);self.compatibility.setChecked(software);self.compatibility.blockSignals(False)
         self.render_status.setText('3D描画：'+message)
-        if hasattr(self,'timer'):self.timer.setInterval(120 if software else 33)
+        if hasattr(self,'timer'):self.timer.setInterval(120 if software else 16)
 
     @property
     def avatar_model(self):return str(self.model_choice.currentData() or 'raft')

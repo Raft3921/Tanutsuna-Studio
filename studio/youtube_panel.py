@@ -62,7 +62,17 @@ class YouTubePanel(QWidget):
     def __init__(self, workspace, parent=None):
         super().__init__(parent)
         self.setObjectName('YouTubePanel')
-        self.setStyleSheet('QWidget#YouTubePanel{background:#e8f6f8;border:1px solid #c6e1e7;border-radius:12px} QLabel#LiveViewerCount{font-size:19px;font-weight:700;color:#126d82}')
+        self.setStyleSheet('''
+            QWidget#YouTubePanel { background:#0a1923; color:#e8f8fb; border:1px solid #244352; border-radius:14px; }
+            QLabel#PageTitle { color:#e8f8fb; font-size:17px; font-weight:800; }
+            QLabel#LiveViewerCount { color:#79e0be; background:#102d2c; border:1px solid #236155; border-radius:10px; padding:8px 11px; font-size:15px; font-weight:750; }
+            QLabel#ChatStatus { color:#a8c3cc; font-size:11px; }
+            QLabel#ChatHint { color:#8eabb4; font-size:11px; }
+            QLineEdit { background:#10232d; color:#e8f8fb; border:1px solid #31515e; border-radius:8px; padding:8px; }
+            QPushButton { background:#173844; color:#e8f8fb; border:1px solid #315967; border-radius:8px; padding:8px 12px; font-weight:700; }
+            QPushButton:hover { background:#20505a; border-color:#57dcbf; }
+            QCheckBox { color:#c1d7de; }
+        ''')
         self.workspace = workspace
         self.video_id = ''
         self.chat_view = None
@@ -70,10 +80,10 @@ class YouTubePanel(QWidget):
         saved = workspace.data.get('live', {})
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        title = QLabel('YouTube LIVE')
+        title = QLabel('LIVE HUB   /   YouTube')
         title.setObjectName('PageTitle')
         layout.addWidget(title)
-        self.viewer_count = QLabel('視聴者数: 配信URLを接続')
+        self.viewer_count = QLabel('VIEWERS  ·  配信URLを接続')
         self.viewer_count.setObjectName('LiveViewerCount')
         layout.addWidget(self.viewer_count)
         row = QHBoxLayout()
@@ -85,11 +95,16 @@ class YouTubePanel(QWidget):
         row.addWidget(self.video_url, 1)
         row.addWidget(self.connect_button)
         layout.addLayout(row)
+        self.chat_status=QLabel('チャット未接続')
+        self.chat_status.setObjectName('ChatStatus')
+        layout.addWidget(self.chat_status)
         self.api_key = QLineEdit()
         self.api_key.setPlaceholderText('視聴者数用 YouTube Data APIキー')
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key.textChanged.connect(self.update_viewer_count)
         layout.addWidget(self.api_key)
+        key_hint=QLabel('APIキーは視聴者数の取得だけに使います。チャット接続には不要です。')
+        key_hint.setObjectName('ChatHint');key_hint.setWordWrap(True);layout.addWidget(key_hint)
         self.remember_api_key = QCheckBox('APIキーをこのPCに保存')
         self.secret_api_loaded = False
         try:
@@ -105,7 +120,7 @@ class YouTubePanel(QWidget):
         self.chat_stack = QStackedWidget()
         self.placeholder = QTextBrowser()
         self.placeholder.setOpenExternalLinks(False)
-        self.placeholder.setHtml('<div style="color:#72919d;text-align:center;margin-top:50px">YouTubeの配信URLを入力して<br>チャットに接続します</div>')
+        self.placeholder.setHtml('<div style="color:#9db8c1;text-align:center;margin-top:90px;font-family:sans-serif"><span style="color:#5be0c2;font-weight:bold;letter-spacing:2px">CHAT LINK  /  READY</span><br><br>YouTubeの配信URLを入力して<br>チャットに接続します</div>')
         self.chat_stack.addWidget(self.placeholder)
         layout.addWidget(self.chat_stack, 1)
         self.refresh_timer = QTimer(self)
@@ -156,13 +171,18 @@ class YouTubePanel(QWidget):
             try:
                 from PySide6.QtWebEngineWidgets import QWebEngineView
                 self.chat_view = QWebEngineView(self.chat_stack)
+                self.chat_view.loadFinished.connect(self.chat_loaded)
                 self.chat_stack.addWidget(self.chat_view)
             except Exception:
                 self.viewer_count.setText('アプリ内チャットを準備できません。アプリを更新してください。')
                 return
-        self.chat_view.setUrl(QUrl('https://www.youtube.com/live_chat?' + urlencode({'is_popout': '1', 'v': video_id})))
+        self.chat_status.setText('チャットを読み込み中…')
+        self.chat_view.setUrl(QUrl('https://www.youtube.com/live_chat?' + urlencode({'is_popout': '1', 'dark_theme': '1', 'v': video_id})))
         self.chat_stack.setCurrentWidget(self.chat_view)
         self.update_viewer_count()
+
+    def chat_loaded(self,ok):
+        self.chat_status.setText('チャット接続中' if ok else 'チャットを読み込めません。配信URLとネット接続を確認してください。')
 
     def update_viewer_count(self,*_):
         if not self.video_id:

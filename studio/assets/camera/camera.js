@@ -11,11 +11,10 @@ function estimateGaze(points){
   for(const e of eyes){const a=points[e.a],b=points[e.b],top=points[e.top],bottom=points[e.bottom],iris=points[e.iris];const w=Math.max(.001,Math.abs(b.x-a.x)),h=Math.max(.001,Math.abs(bottom.y-top.y));if(h/w<.12)continue;x+=(iris.x-(a.x+b.x)/2)/w;y+=(iris.y-(top.y+bottom.y)/2)/h;n++;}
   return n?{x:x/n,y:y/n}:{x:0,y:0};
 }
-// CPU face inference competes with capture and editing on Windows laptops.
-// Fifteen inference frames per second at 320x240 reduces that load while
-// keeping head and mouth tracking responsive.
+// Keep inference near 30fps so brief eye blinks are not skipped. Windows uses
+// a small 320x240 frame to reduce CPU use while the output compositor runs at 60fps.
 const windowsTracking=/Windows/i.test(navigator.userAgent);
-const trackingInterval=windowsTracking?66:50;
+const trackingInterval=windowsTracking?40:33;
 const sensitivity=$('speech-sensitivity'),queryGain=Number(new URLSearchParams(location.hash.slice(1)).get('voiceGain'));
 if(sensitivity){const saved=localStorage.getItem('speech-sensitivity');if(Number.isFinite(queryGain)&&queryGain>0)sensitivity.value=String(Math.max(.5,Math.min(5,queryGain)));else if(saved)sensitivity.value=saved;}
 function showSensitivity(){ $('speech-sensitivity-value').value=Number(sensitivity.value).toFixed(1);localStorage.setItem('speech-sensitivity',sensitivity.value); }
@@ -77,6 +76,8 @@ function poseFromResult(result) {
     headX:(m[12]-baseline.x)*.045,headY:(m[13]-baseline.y)*.045,headZ:(m[14]-baseline.z)*.035,
     gazeX:Math.max(-.35,Math.min(.35,(gaze.x-baseline.gazeX)*1.5)),
     gazeY:Math.max(-.35,Math.min(.35,(gaze.y-baseline.gazeY)*1.5)),
+    eyeBlinkLeft:Math.max(0,Math.min(1,c.eyeBlinkLeft||0)),
+    eyeBlinkRight:Math.max(0,Math.min(1,c.eyeBlinkRight||0)),
     jawOpen:vowel?Math.max(jawOpen,.16):0,browUp:c.browInnerUp||0,
     // Use the same vowel classifier as the source avatar to preserve its authored mouth proportions.
     mouthA:vowel===1?1:0,mouthI:vowel===2?1:0,mouthU:vowel===3?1:0,
