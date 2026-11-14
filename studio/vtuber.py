@@ -5,10 +5,11 @@ import shutil
 import sys
 import time
 from datetime import datetime
-from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtCore import Qt, QTimer, QSettings, Signal
 from PySide6.QtWidgets import (QApplication,QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QGroupBox,
-    QLabel,QPushButton,QComboBox,QSlider,QCheckBox,QFileDialog,QMessageBox,QSplitter,QDoubleSpinBox,QScrollArea)
+    QLabel,QPushButton,QComboBox,QSlider,QCheckBox,QFileDialog,QMessageBox,QSplitter,QDoubleSpinBox,QScrollArea,QStackedWidget)
 from .raft_avatar import RaftAvatarView, AvatarAssetServer
+from .avatar_view import AvatarViewport
 from .tracking import Pose, TrackerServer, smooth_pose
 from .mouth import VOWELS, LABELS, DEFAULT_SHAPES, dimensions
 
@@ -18,12 +19,26 @@ class AvatarOutput(QDialog):
         super().__init__(parent,Qt.WindowType.Window)
         self.setWindowTitle('V体出力 — たぬつな')
         self.resize(720,720)
-        self.view=RaftAvatarView(self)
-        self.view.set_background('#00ff00')
-        layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0);layout.addWidget(self.view)
+        self.stack=QStackedWidget(self)
+        self.raft_view=RaftAvatarView(self);self.raft_view.set_background('#00ff00')
+        self.tanuki_view=AvatarViewport(self,software=software);self.tanuki_view.background=QColor('#00ff00')
+        self.stack.addWidget(self.raft_view);self.stack.addWidget(self.tanuki_view)
+        self.view=self.raft_view;layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0);layout.addWidget(self.stack)
+
+    def set_model(self,model):
+        self.view=self.raft_view if model=='raft' else self.tanuki_view
+        self.stack.setCurrentWidget(self.view)
+
+    def set_background(self,color):
+        if self.view is self.raft_view:self.view.set_background(color)
+        else:self.view.background=QColor(color);self.view.update_pose(self.view.pose,self.view.now)
+
+    def set_pose(self,pose,now,orbit):
+        self.view.orbit=orbit;self.view.update_pose(pose,now)
 
 
 class VtuberPanel(QWidget):
+    modelChanged=Signal(str)
     def __init__(self,parent=None,project_getter=None):
         super().__init__(parent)
         self.project_getter=project_getter
@@ -47,6 +62,10 @@ class VtuberPanel(QWidget):
         self.setMinimumHeight(420)
         outer=QVBoxLayout(self)
         controls=QHBoxLayout()
+        self.model_choice=QComboBox();self.model_choice.addItem('ラフトV体','raft');self.model_choice.addItem('たぬつなV体','tanuki')
+        saved_model=QSettings('TanutsunaStudio','Avatar').value('model','raft')
+        self.model_choice.setCurrentIndex(max(0,self.model_choice.findData(saved_model)))
+        controls.addWidget(QLabel('使用するV体'));controls.addWidget(self.model_choice)
         self.mode=QComboBox();self.mode.addItems(['手動で可動確認','可動テスト（自動）','カメラ追跡'])
         from .camera_choice import CameraChoice
         self.camera_choice=CameraChoice(self);self.camera_choice.selectedCameraChanged.connect(self.change_camera);controls.addWidget(QLabel('カメラ'));controls.addWidget(self.camera_choice)
@@ -57,9 +76,11 @@ class VtuberPanel(QWidget):
         controls.addStretch()
         outer.addLayout(controls)
         split=QSplitter()
-        self.viewport=RaftAvatarView(self)
-        self.viewport.set_background('#4b535c')
-        split.addWidget(self.viewport)
+        self.view_stack=QStackedWidget(self)
+        self.raft_view=RaftAvatarView(self);self.raft_view.set_background('#4b535c')
+        self.tanuki_view=AvatarViewport(self)
+        self.view_stack.addWidget(self.raft_view);self.view_stack.addWidget(self.tanuki_view)
+        split.addWidget(self.view_stack)
         settings=QWidget();right=QVBoxLayout(settings)
         group=QGroupBox('手動の可動確認');form=QFormLayout(group)
         self.sliders={}
@@ -117,8 +138,11 @@ class VtuberPanel(QWidget):
         help_.setWordWrap(True);outer.addWidget(help_)
         self.render_status=QLabel('3D描画：Raftモデルを読み込み中')
         self.render_status.setWordWrap(True);outer.addWidget(self.render_status)
-        self.viewport.backendChanged.connect(self.renderer_changed)
-        self.timer=QTimer(self);self.timer.setInterval(120 if self.viewport.software else 33);self.timer.timeout.connect(self.tick);self.timer.start()
+        self.raft_view.backendChanged.connect(lambda _software,message:self.render_status.setText('3D描画：'+message) if self.model_choice.currentData()=='raft' else None)
+        self.tanuki_view.backendChanged.connect(self.renderer_changed)
+        self.model_choice.currentIndexChanged.connect(self.change_model)
+        self.change_model()
+        self.timer=QTimer(self);self.timer.setInterval(120 if self.tanuki_view.software else 33);self.timer.timeout.connect(self.tick);self.timer.start()
 
     def load_mouth_shape(self,*_):
         width,height=self.mouth_shapes[VOWELS[self.vowel.currentIndex()]]
@@ -137,6 +161,18 @@ class VtuberPanel(QWidget):
         self.compatibility.blockSignals(True);self.compatibility.setChecked(software);self.compatibility.blockSignals(False)
         self.render_status.setText('3D描画：'+message)
         if hasattr(self,'timer'):self.timer.setInterval(120 if software else 33)
+
+    @property
+    def avatar_model(self):return str(self.model_choice.currentData() or 'raft')
+
+    def change_model(self,*_):
+        self.viewport=self.raft_view if self.avatar_model=='raft' else self.tanuki_view
+        self.view_stack.setCurrentWidget(self.viewport)
+        if self.output:self.output.set_model(self.avatar_model)
+        self.render_status.setText('3D描画：'+('Raftモデルを読み込み中' if self.avatar_model=='raft' else 'たぬつなモデル'))
+        QSettings('TanutsunaStudio','Avatar').setValue('model',self.avatar_model)
+        self._last_status=''
+        self.modelChanged.emit(self.avatar_model)
 
     def start_tracking(self,checked=False,automatic=False):
         try:
@@ -197,11 +233,12 @@ class VtuberPanel(QWidget):
         self.neutral=[0,0,0];self.orbit.setValue(0)
 
     def switch_renderer(self,software):
-        self.viewport.set_software(software)
-        if self.output:self.output.view.set_software(software)
+        self.tanuki_view.set_software(software)
+        if self.output:self.output.tanuki_view.set_software(software)
 
     def open_output(self):
         if self.output is None:self.output=AvatarOutput(self,self.compatibility.isChecked())
+        self.output.set_model(self.avatar_model)
         self.output.show();self.output.raise_();self.output.activateWindow()
 
     def tick(self):
@@ -266,11 +303,12 @@ class VtuberPanel(QWidget):
         target.mouthStroke=self.stroke.value()
         self.pose=smooth_pose(self.pose,target,dt)
         self.viewport.orbit=self.orbit.value()
-        if self.viewport.isVisible():self.viewport.update_pose(self.pose,t)
+        if self.viewport.isVisible():
+            self.viewport.update_pose(self.pose,t)
+            if self.avatar_model=='raft':self.raft_view.capture_frame()
         if self.output and self.output.isVisible():
-            self.output.view.set_background(['#4b535c','#00ff00','#0000ff'][self.background.currentIndex()])
-            self.output.view.orbit=self.orbit.value()
-            self.output.view.update_pose(self.pose,t)
+            self.output.set_background(['#4b535c','#00ff00','#0000ff'][self.background.currentIndex()])
+            self.output.set_pose(self.pose,t,self.orbit.value())
         if self.recording:
             frame={'time':round(now-self.record_start,4),'source':['manual','demo','camera'][mode],'detected':detected,'pose':self.pose.__dict__}
             self.recording.write(json.dumps(frame,separators=(',',':'))+'\n')
@@ -302,6 +340,7 @@ class VtuberPanel(QWidget):
     def shutdown(self):
         self.timer.stop();self.server.stop()
         if self.recording:self.recording.close();self.recording=None
-        if self.output:self.output.view.release();self.output.close()
-        self.viewport.release()
+        if self.output:
+            self.output.raft_view.release();self.output.tanuki_view.release();self.output.close()
+        self.raft_view.release();self.tanuki_view.release()
         AvatarAssetServer.stop()

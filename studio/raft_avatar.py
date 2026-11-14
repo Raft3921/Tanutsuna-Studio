@@ -1,12 +1,14 @@
 """Embedded view for the face-following FBX avatar supplied with the project."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from base64 import b64decode
 import mimetypes
 import threading
+import time
 from urllib.parse import unquote, urlsplit
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QUrl, Signal, QByteArray
+from PySide6.QtGui import QColor, QImage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 
@@ -73,6 +75,10 @@ class RaftAvatarView(QWebEngineView):
         self.background = 'transparent'
         self.software = False
         self._loaded = False
+        self._frame = QImage()
+        self._capture_pending = False
+        self._last_capture_request = 0.
+        self._model_status = ''
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet('background: transparent; border: none;')
         self.page().setBackgroundColor(QColor(0, 0, 0, 0))
@@ -82,7 +88,7 @@ class RaftAvatarView(QWebEngineView):
     def _on_loaded(self, ok):
         self._loaded = bool(ok)
         if ok:
-            self.backendChanged.emit(False, 'Raft 3Dモデル')
+            self.backendChanged.emit(False, 'ラフトのプレビューを準備中')
             self.update_pose(self._pose, self._now)
             self.set_background(self.background)
         else:
@@ -107,6 +113,33 @@ class RaftAvatarView(QWebEngineView):
         # harmless for existing saved UI state.
         pass
 
+    def capture_frame(self):
+        """Capture the original Three.js canvas, retaining its transparent pixels."""
+        now=time.monotonic()
+        if not self._loaded or self._capture_pending or now-self._last_capture_request<1/30:
+            return self._frame
+        self._capture_pending=True;self._last_capture_request=now
+        self.page().runJavaScript('window.captureAvatarFrame && window.captureAvatarFrame()',self._receive_frame)
+        return self._frame
+
+    def _receive_frame(self,result):
+        self._capture_pending=False
+        if isinstance(result,str) and result.startswith('error:'):
+            status='モデルを読み込めません: '+result[6:]
+            if status!=self._model_status:
+                self._model_status=status;self.backendChanged.emit(False,status)
+            return
+        if isinstance(result,str) and result.startswith('data:image/png;base64,'):
+            try:
+                image=QImage.fromData(b64decode(result.split(',',1)[1],validate=True),b'PNG')
+                if not image.isNull():
+                    self._frame=image.convertToFormat(QImage.Format.Format_RGBA8888)
+                    if self._model_status!='ready':
+                        self._model_status='ready';self.backendChanged.emit(False,'ラフトモデル表示中')
+            except (ValueError,TypeError):
+                pass
+
     def release(self):
         self._loaded = False
+        self._frame=QImage()
         self.setUrl(QUrl('about:blank'))

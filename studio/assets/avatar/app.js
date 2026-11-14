@@ -17,7 +17,7 @@ const errorBox = document.querySelector('#error');
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.01, 1000);
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, stencil: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, stencil: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -77,6 +77,7 @@ function createInkOutline(geometry, width) {
   });
 }
 let model = null;
+window.avatarError = '';
 let headPivot = null;
 let outfit3D = null;
 let bodySwayPivot = null;
@@ -459,6 +460,7 @@ async function loadFaceTextures() {
 
 function showModelError(error) {
   console.error(error);
+  window.avatarError = String(error && error.message || error);
   showError(`モデルを読み込めませんでした: ${error.message || error}`);
   setStatus('モデルを読み込めません');
 }
@@ -594,6 +596,11 @@ window.updateAvatarPose = pose => {
   window.avatarMouthHeight = Math.max(.15, Math.min(1.3, Number(pose.mouthHeight) || 1));
 };
 window.updateAvatarPose({});
+window.captureAvatarFrame = () => {
+  if (window.avatarError) return `error:${window.avatarError}`;
+  if (!model) return '';
+  return renderer.domElement.toDataURL('image/png');
+};
 
 let previousRenderTime = performance.now();
 function render() {
