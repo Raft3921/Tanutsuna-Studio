@@ -1,4 +1,6 @@
 vendor/
+!studio/assets/avatar/vendor/
+!studio/assets/avatar/vendor/**
 dist/
 __pycache__/
 *.pyc

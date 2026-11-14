@@ -1,0 +1,1 @@
+*{box-sizing:border-box}html,body,.stage{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}#canvas-host{position:absolute;inset:0}#canvas-host canvas{display:block;width:100%;height:100%}.error{display:none;position:absolute;left:5%;right:5%;bottom:8px;padding:8px;background:#fff;color:#73382c;font:12px system-ui,sans-serif}

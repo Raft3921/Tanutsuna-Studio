@@ -72,7 +72,7 @@ def build():
         '--add-data', str(app / 'cutraft/resources') + ':cutraft/resources',
         '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build/mac'),
         '--specpath', str(ROOT / 'build')]
-    for name in ('camera','tracker','tanuki'):
+    for name in ('camera','tracker','tanuki','avatar'):
         # Authored Blender sources are not needed at runtime.
         if name == 'tanuki':
             for filename in ('tanuki.mesh.json.gz','tanuki.glb','tanuki_basecolor.png','goggle_lens.png'):
